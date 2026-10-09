@@ -1,6 +1,8 @@
 name: build-image
-run-name: Build the shimboot disk image for all boards
-on: [push]
+run-name: Build the shimboot and UEFI disk images for octopus
+on:
+  push:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -9,7 +11,7 @@ jobs:
 
     strategy: 
       matrix:
-        board: [dedede, octopus, coral, grunt, nissa, zork, corsola, jacuzzi, hatch, snappy, hana]
+        board: [octopus]
 
     runs-on: ubuntu-latest
     steps:
@@ -49,3 +51,47 @@ jobs:
         with:
           draft: true
           files: data/shimboot_${{ matrix.board }}.zip
+
+  build-uefi:
+    permissions:
+      contents: write
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: remove snap
+        uses: ading2210/gh-actions-remove-snap@v1
+        with:
+          disable_man_db: 'true'
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: download repo
+        uses: actions/checkout@v4
+
+      - name: run build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap dosfstools fdisk
+          sudo DEBUG=1 ./build_uefi.sh data/shimboot_octopus_uefi.bin
+          sudo zip -j data/shimboot_octopus_uefi.zip data/shimboot_octopus_uefi.bin
+
+      - name: upload img
+        uses: actions/upload-artifact@v4
+        with:
+          name: shimboot_octopus_uefi
+          path: data/shimboot_octopus_uefi.bin
+          compression-level: 7
+
+      - name: create release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: data/shimboot_octopus_uefi.zip
