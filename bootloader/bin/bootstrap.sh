@@ -467,26 +467,46 @@ try_kexec() {
 
   [ "$USE_KEXEC" = "no" ] && return 1
   [ "$rescue_mode" = "1" ] && return 1
-  [ -x "$(command -v kexec)" ] || return 1
+
+  #every way out of here prints why, then waits a moment so it can be read before init takes the screen
+  kexec_skip() {
+    echo "kexec: skipped, $1. booting the shim kernel instead."
+    sleep 4
+    return 1
+  }
+
+  if [ ! -x "$(command -v kexec)" ]; then
+    kexec_skip "no kexec binary in the bootloader"
+    return 1
+  fi
   if [ ! -e /sys/kernel/kexec_loaded ]; then
-    echo "kexec: the shim kernel was built without kexec support, using it instead"
+    kexec_skip "the shim kernel was built without kexec support"
     return 1
   fi
 
   local kernel="$(ls -1 $mnt/boot/vmlinuz-* 2>/dev/null | sort -V | tail -n1)"
-  [ "$kernel" ] || return 1
+  if [ ! "$kernel" ]; then
+    kexec_skip "no /boot/vmlinuz-* on $target"
+    return 1
+  fi
   local version="${kernel##*/vmlinuz-}"
   local initrd="$mnt/boot/initrd.img-$version"
-  [ -f "$initrd" ] || return 1
+  if [ ! -f "$initrd" ]; then
+    kexec_skip "no initrd for kernel $version"
+    return 1
+  fi
 
   local disk="/dev/$(part_disk_name "$target")"
   local partuuid="$(cgpt show -i "$(part_number "$target")" -u "$disk" 2>/dev/null)"
-  [ "$partuuid" ] || return 1
+  if [ ! "$partuuid" ]; then
+    kexec_skip "couldn't read the partuuid of $target"
+    return 1
+  fi
 
   echo "kexec: loading kernel $version"
   if ! kexec -l "$kernel" --initrd="$initrd" \
       --command-line="root=PARTUUID=$partuuid rootwait rw quiet"; then
-    echo "kexec: failed to load the kernel, falling back"
+    kexec_skip "kexec -l failed"
     return 1
   fi
 
@@ -497,6 +517,7 @@ try_kexec() {
   echo "kexec: failed to execute the new kernel, falling back"
   kexec -u 2>/dev/null
   mount "$target" "$mnt" #we unmounted it above, the normal boot path still needs it
+  sleep 4
   return 1
 }
 
