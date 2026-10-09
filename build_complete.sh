@@ -238,6 +238,12 @@ fi
 print_title "patching $distro rootfs"
 retry_cmd ./patch_rootfs.sh $shim_bin $reco_bin $rootfs_dir "quiet=$quiet"
 
+#when building for release (ci), free the space used by files that are no longer needed
+if [ "$compress_img" ]; then
+  rm -f "$reco_bin"
+  rm -rf /tmp/chromium-firmware
+fi
+
 print_title "building final disk image"
 final_image="$data_dir/shimboot_$board.bin"
 rm -rf $final_image
@@ -253,6 +259,10 @@ print_info "the boot-only disk image is located at $boot_image"
 
 print_title "cleaning up"
 clean_loops
+rm -rf /tmp/vboot_reference /tmp/vboot_devkeys /tmp/kernel_dev.img
+if [ "$compress_img" ]; then
+  rm -f "$shim_bin"
+fi
 
 if [ "$compress_img" ]; then
   image_zip="$data_dir/shimboot_$board.zip"
