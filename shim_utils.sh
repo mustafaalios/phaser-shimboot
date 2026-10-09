@@ -64,3 +64,29 @@ extract_initramfs_full() {
   fi
   rm -rf $kernel_dir
 }
+#re-sign a kernel partition image with the public chrome os developer keys, so that the
+#firmware will boot it from the internal disk in developer mode
+sign_dev_kernel() {
+  local kernel_in="$1"
+  local kernel_out="$2"
+  local keys_dir="/tmp/vboot_devkeys"
+  local repo_dir="/tmp/vboot_reference"
+
+  if ! command -v futility >/dev/null 2>&1; then
+    echo "warning: futility is not installed, skipping the internal-boot kernel" >&2
+    return 1
+  fi
+
+  if [ ! -f "$keys_dir/kernel.keyblock" ]; then
+    rm -rf "$repo_dir" "$keys_dir"
+    git clone --depth=1 https://chromium.googlesource.com/chromiumos/platform/vboot_reference "$repo_dir" >&2 || return 1
+    mkdir -p "$keys_dir"
+    cp "$repo_dir/tests/devkeys/"* "$keys_dir/" || return 1
+  fi
+
+  futility vbutil_kernel --repack "$kernel_out" \
+    --keyblock "$keys_dir/kernel.keyblock" \
+    --signprivate "$keys_dir/kernel_data_key.vbprivk" \
+    --version 1 \
+    --oldblob "$kernel_in" >&2 || return 1
+}

@@ -44,6 +44,11 @@ if [ "$(check_deps "$needed_deps")" ]; then
   assert_deps "$needed_deps"
 fi
 
+#futility signs the kernel used for booting from the internal disk, the build still works without it
+if ! command -v futility >/dev/null 2>&1 && [ -f "/etc/debian_version" ]; then
+  apt-get install -y vboot-utils || print_error "could not install vboot-utils, the image will not be able to boot from the emmc by itself"
+fi
+
 cleanup_path=""
 sigint_handler() {
   if [ $cleanup_path ]; then

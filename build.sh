@@ -60,6 +60,21 @@ extract_initramfs_full "$shim_path" "$initramfs_dir" "$kernel_img"
 print_info "patching initramfs"
 patch_initramfs "$initramfs_dir"
 
+#an extra kernel signed for developer mode lets the emmc boot without the external drive
+print_info "signing the internal-boot kernel"
+bootloader_size=20
+kernel_dev_img=/tmp/kernel_dev.img
+rm -f "$kernel_dev_img"
+if sign_dev_kernel "$kernel_img" "$kernel_dev_img"; then
+  mkdir -p "$initramfs_dir/opt"
+  cp "$kernel_dev_img" "$initramfs_dir/opt/kernel_dev.img"
+  kernel_dev_mb="$(( ($(stat -c %s "$kernel_dev_img") + 1048575) / 1048576 ))"
+  #the bootloader partition has to hold the kernel as well
+  bootloader_size="$((20 + kernel_dev_mb + 5))"
+else
+  print_error "could not sign the internal-boot kernel, the image will only boot from external media"
+fi
+
 print_info "creating disk image"
 rootfs_size="$(du -sm $rootfs_dir | cut -f 1)"
 rootfs_part_size="$(($rootfs_size * 12 / 10 + 5))"
@@ -70,7 +85,7 @@ if [ "$bootonly" ]; then
 fi
 #create a 20mb bootloader partition
 #rootfs partition is 20% larger than its contents
-create_image "$output_path" 20 "$rootfs_part_size" "$bootloader_part_name"
+create_image "$output_path" "$bootloader_size" "$rootfs_part_size" "$bootloader_part_name"
 
 print_info "creating loop device for the image"
 image_loop="$(create_loop ${output_path})"

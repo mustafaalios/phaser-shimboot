@@ -207,7 +207,27 @@ dev_sectors() {
   cat "/sys/class/block/$(basename "$1")/size"
 }
 
-#wipe the emmc, then clone the first external shimboot rootfs onto it
+#copy a block device to another one with a progress bar
+clone_partition() {
+  local source="$1"
+  local target="$2"
+  local bytes=$(($(dev_sectors "$source") * 512))
+  dd if="$source" bs=4M 2>/dev/null | pv -s "$bytes" | dd of="$target" bs=4M conv=fsync 2>/dev/null
+}
+
+wait_for_partition() {
+  local target="$1"
+  local tries=0
+  while [ ! -b "$target" ] && [ "$tries" -lt 10 ]; do
+    mdev -s 2>/dev/null
+    sleep 1
+    tries=$((tries+1))
+  done
+  [ -b "$target" ]
+}
+
+#wipe the emmc, then recreate the boot media's layout on it so the emmc can boot by itself:
+#1 stateful, 2 kernel, 3 bootloader, 4 rootfs
 install_to_emmc() {
   local rootfs_partitions="$1"
   local emmc="$(find_emmc_disk)"
@@ -232,12 +252,31 @@ install_to_emmc() {
     return 1
   fi
 
+  #the other partitions come from the same disk as the rootfs
+  local source_disk="$(echo "$source" | sed 's/p\?[0-9]\+$//')"
+  local src_state="$(get_part_dev "$source_disk" 1)"
+  local src_kernel="$(get_part_dev "$source_disk" 2)"
+  local src_boot="$(get_part_dev "$source_disk" 3)"
+  for part in "$src_state" "$src_kernel" "$src_boot"; do
+    if [ ! -b "$part" ]; then
+      echo "unexpected layout on the boot media, $part is missing"
+      sleep 3
+      return 1
+    fi
+  done
+
+  #sector layout, 1MiB aligned
   local disk_sectors="$(dev_sectors "$emmc")"
-  local source_sectors="$(dev_sectors "$source")"
-  #leave 1MiB at the start and room for the backup gpt at the end
-  local part_start=2048
-  local part_sectors=$((disk_sectors - part_start - 2048))
-  if [ "$part_sectors" -lt "$source_sectors" ]; then
+  local state_start=2048
+  local state_sectors=2048
+  local kernel_start=4096
+  local kernel_sectors=65536
+  local boot_start=$((kernel_start + kernel_sectors))
+  local boot_sectors="$(dev_sectors "$src_boot")"
+  local rootfs_start=$((boot_start + boot_sectors))
+  local rootfs_sectors="$(dev_sectors "$source")"
+  local rootfs_max=$((disk_sectors - rootfs_start - 2048))
+  if [ "$rootfs_max" -lt "$rootfs_sectors" ]; then
     echo "the emmc is too small for this image"
     sleep 2
     return 1
@@ -246,8 +285,7 @@ install_to_emmc() {
   clear
   echo "This will ERASE EVERYTHING on ${emmc}, including Chrome OS."
   echo "The firmware and enrollment are not touched, and Chrome OS can be restored"
-  echo "later with a recovery usb. After installing, the boot media must stay"
-  echo "inserted to start the system."
+  echo "later with a recovery usb."
   echo
   fdisk -l "$emmc" 2>/dev/null | head -n 4
   echo
@@ -259,34 +297,53 @@ install_to_emmc() {
   fi
 
   echo "creating partition table"
+  local kernel_type="FE3A2A5D-4F32-41A7-B725-ACCC3285A309"
+  local rootfs_type="3CB8E202-3B7E-47DD-8A3C-7FF2A13CFCEC"
+  local data_type="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
   cgpt create -z "$emmc" || return 1
   cgpt create "$emmc" || return 1
-  cgpt add -i 1 -t 0FC63DAF-8483-4772-8E79-3D69D8477DE4 \
-    -b $part_start -s $part_sectors \
-    -l "shimboot_rootfs:${source_name}" "$emmc" || return 1
+  cgpt add -i 1 -t $data_type -b $state_start -s $state_sectors -l "stateful" "$emmc" || return 1
+  cgpt add -i 2 -t $kernel_type -b $kernel_start -s $kernel_sectors -l "kernel" -S 1 -T 5 -P 10 "$emmc" || return 1
+  cgpt add -i 3 -t $rootfs_type -b $boot_start -s $boot_sectors -l "bootloader" "$emmc" || return 1
+  cgpt add -i 4 -t $data_type -b $rootfs_start -s $((rootfs_max)) -l "shimboot_rootfs:${source_name}" "$emmc" || return 1
   #writing the table with fdisk makes the kernel re-read it
   echo w | fdisk "$emmc" >/dev/null 2>&1
 
-  local target="$(get_part_dev "$emmc" 1)"
-  local tries=0
-  while [ ! -b "$target" ] && [ "$tries" -lt 10 ]; do
-    mdev -s 2>/dev/null
-    sleep 1
-    tries=$((tries+1))
+  local emmc_state="$(get_part_dev "$emmc" 1)"
+  local emmc_kernel="$(get_part_dev "$emmc" 2)"
+  local emmc_boot="$(get_part_dev "$emmc" 3)"
+  local emmc_rootfs="$(get_part_dev "$emmc" 4)"
+  for part in "$emmc_state" "$emmc_kernel" "$emmc_boot" "$emmc_rootfs"; do
+    if ! wait_for_partition "$part"; then
+      echo "partition $part did not appear"
+      sleep 3
+      return 1
+    fi
   done
-  if [ ! -b "$target" ]; then
-    echo "partition $target did not appear"
-    sleep 3
-    return 1
+
+  echo "copying the bootloader"
+  clone_partition "$src_state" "$emmc_state"
+  clone_partition "$src_boot" "$emmc_boot"
+
+  #the emmc gets a kernel signed for developer mode boots, if the image includes one
+  if [ -f /opt/kernel_dev.img ]; then
+    echo "writing the internal-boot kernel"
+    dd if=/opt/kernel_dev.img of="$emmc_kernel" bs=1M conv=fsync 2>/dev/null
+  else
+    echo "this image has no internal-boot kernel, copying the boot media kernel instead"
+    clone_partition "$src_kernel" "$emmc_kernel"
   fi
 
-  echo "copying $source to $target"
-  dd if="$source" bs=4M 2>/dev/null | pv -s $((source_sectors * 512)) | dd of="$target" bs=4M conv=fsync 2>/dev/null
+  echo "copying $source to $emmc_rootfs"
+  clone_partition "$source" "$emmc_rootfs"
   sync
 
   echo
-  echo "install finished. keep the boot media inserted; the system now boots from the emmc."
-  echo "the root filesystem will grow to fill the emmc on the first boot."
+  echo "install finished. the root filesystem will grow to fill the emmc on the first boot."
+  echo
+  echo "to boot without the external drive: unplug it, reboot, and at the"
+  echo "'OS verification is OFF' screen press Ctrl+D. if the firmware refuses, the"
+  echo "external drive and Esc+Refresh+Power still work as before."
   read -p "press [enter] to continue "
   return 0
 }
