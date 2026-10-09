@@ -15,6 +15,7 @@ print_help() {
   echo "  arch         - The CPU architecture to build the shimboot image for. Set this to 'arm64' if you have an ARM Chromebook."
   echo "  release      - Set this to either 'bookworm', 'trixie', or 'unstable' to build for Debian 12, 13, or unstable."
   echo "  distro       - The Linux distro to use. This should be either 'debian', 'ubuntu', or 'alpine'."
+  echo "  distro_kernel - Install the distro's own (much newer) kernel and kexec into it at boot. Defaults to true on amd64 debian/ubuntu."
   echo "  luks         - Set this argument to encrypt the rootfs partition."
 }
 
@@ -34,6 +35,7 @@ arch="${args['arch']-amd64}"
 release="${args['release']}"
 distro="${args['distro']-debian}"
 luks="${args['luks']}"
+distro_kernel="${args['distro_kernel']}"
 
 #a list of all arm board names
 arm_boards="
@@ -269,7 +271,12 @@ if [ ! "$rootfs_dir" ]; then
     fi
   fi
 
+  if [ -z "$distro_kernel" ] && [ "$arch" = "amd64" ] && [ "$distro" != "alpine" ]; then
+    distro_kernel="true"
+  fi
+  [ "$distro_kernel" = "false" ] && distro_kernel=""
   ./build_rootfs.sh $rootfs_dir $release \
+    distro_kernel=$distro_kernel \
     custom_packages=$desktop_package \
     hostname=shimboot-$board \
     username=user \

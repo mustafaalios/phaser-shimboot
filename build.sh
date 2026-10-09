@@ -12,6 +12,7 @@ print_help() {
   echo "  quiet - Don't use progress indicators which may clog up log files."
   echo "  arch  - Set this to 'arm64' to specify that the shim is for an ARM chromebook."
   echo "  name  - The name for the shimboot rootfs partition."
+  echo "  kexec - Set to 'false' to leave out kexec, so the shim's own kernel is always used. Defaults to true on amd64."
   echo "  luks  - Set this argument to encrypt the rootfs partition. Currently not available on arm64-based chromebooks."
 }
 
@@ -28,6 +29,7 @@ quiet="${args['quiet']}"
 arch="${args['arch']-amd64}"
 bootloader_part_name="${args['name']}"
 luks_enabled="${args['luks']}"
+kexec_enabled="${args['kexec']-true}"
 
 if [ "$luks_enabled" ]; then
   while true; do
@@ -47,6 +49,11 @@ if [ "$luks_enabled" ]; then
   tar -xf "$temp_shimboot_binaries" -C $(realpath -m "bootloader/bin/") "cryptsetup"
   rm "$temp_shimboot_binaries"
   chmod +x "$(realpath -m "bootloader/bin/")/cryptsetup"
+fi
+
+if [ "$kexec_enabled" = "true" ] && [ "$arch" = "amd64" ] && [ ! -x bootloader/bin/kexec ]; then
+  print_info "building kexec"
+  ./build_kexec.sh || print_error "could not build kexec, the image will boot using the shim kernel only"
 fi
 
 print_info "reading the shim image"

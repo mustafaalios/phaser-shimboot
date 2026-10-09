@@ -94,6 +94,83 @@ move_mounts() {
   done
 }
 
+#settings, overridable by editing /opt/shimboot.conf on the bootloader partition
+AUTOBOOT_TIMEOUT=5     #seconds to wait before booting automatically, 0 to disable
+AUTOBOOT_PREFER="internal" #"internal" prefers emmc/nvme/sata over usb and sd, "any" takes the first one found
+USE_KEXEC="auto"       #"auto" kexecs into the rootfs's own kernel when possible, "no" always uses the shim kernel
+[ -f /opt/shimboot.conf ] && . /opt/shimboot.conf
+
+#get the whole-disk name (e.g. mmcblk0, sda) from a partition path
+part_disk_name() {
+  local name="${1#/dev/}"
+  case "$name" in
+    mmcblk*|nvme*|loop*) echo "$name" | sed 's/p[0-9]\+$//' ;;
+    *) echo "$name" | sed 's/[0-9]\+$//' ;;
+  esac
+}
+
+#get the partition number from a partition path
+part_number() {
+  echo "$1" | sed 's/.*[^0-9]\([0-9]\+\)$/\1/'
+}
+
+#succeeds if the partition is on a fixed internal drive (emmc, nvme, sata) rather than usb or an sd card
+is_internal_part() {
+  local disk="$(part_disk_name "$1")"
+  [ -d "/sys/block/$disk" ] || return 1
+  case "$disk" in
+    nvme*) return 0 ;;
+    mmcblk*)
+      [ "$(cat /sys/block/$disk/device/type 2>/dev/null)" = "MMC" ] ;;
+    *)
+      [ "$(cat /sys/block/$disk/removable 2>/dev/null)" = "0" ] &&
+        ! readlink -f "/sys/block/$disk" | grep -q "/usb[0-9]" ;;
+  esac
+}
+
+#pick the partition to boot automatically, prints "path:name:flags" or nothing
+pick_autoboot() {
+  local rootfs_partitions="$1"
+  local first=""
+  for rootfs_partition in $rootfs_partitions; do
+    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
+    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
+    [ "$part_flags" = "CrOS" ] && continue
+    [ "$first" ] || first="$rootfs_partition"
+    if [ "$AUTOBOOT_PREFER" = "internal" ] && is_internal_part "$part_path"; then
+      echo "$rootfs_partition"
+      return 0
+    fi
+  done
+  #if internal was requested but only external drives exist, still boot the first
+  echo "$first"
+}
+
+#busybox may be built without read -t / -n, so test before relying on it
+read_timeout_supported() {
+  echo x | (read -t 1 -n 1 _k) 2>/dev/null
+}
+
+#wait for the given number of seconds, succeeds if no key was pressed
+autoboot_countdown() {
+  local seconds="$1"
+  local label="$2"
+  if ! read_timeout_supported; then
+    return 1
+  fi
+  local i="$seconds"
+  while [ "$i" -gt 0 ]; do
+    printf "\rbooting %s in %ss, press any key for the menu... " "$label" "$i"
+    if read -t 1 -n 1 _key; then
+      echo
+      return 1
+    fi
+    i=$((i-1))
+  done
+  echo
+  return 0
+}
+
 print_license() {
   local shimboot_version="$(cat /opt/.shimboot_version)"
   if [ -f "/opt/.shimboot_version_dev" ]; then
@@ -289,6 +366,47 @@ exec_init() {
   fi
 }
 
+#load the kernel from the target rootfs and jump into it, this only returns on failure
+#the shim kernel is old (4.14 on octopus), so this lets the distro's own newer kernel run instead
+try_kexec() {
+  local target="$1"
+  local mnt="$2"
+
+  [ "$USE_KEXEC" = "no" ] && return 1
+  [ "$rescue_mode" = "1" ] && return 1
+  [ -x "$(command -v kexec)" ] || return 1
+  if [ ! -e /sys/kernel/kexec_loaded ]; then
+    echo "kexec: the shim kernel was built without kexec support, using it instead"
+    return 1
+  fi
+
+  local kernel="$(ls -1 $mnt/boot/vmlinuz-* 2>/dev/null | sort -V | tail -n1)"
+  [ "$kernel" ] || return 1
+  local version="${kernel##*/vmlinuz-}"
+  local initrd="$mnt/boot/initrd.img-$version"
+  [ -f "$initrd" ] || return 1
+
+  local disk="/dev/$(part_disk_name "$target")"
+  local partuuid="$(cgpt show -i "$(part_number "$target")" -u "$disk" 2>/dev/null)"
+  [ "$partuuid" ] || return 1
+
+  echo "kexec: loading kernel $version"
+  if ! kexec -l "$kernel" --initrd="$initrd" \
+      --command-line="root=PARTUUID=$partuuid rootwait rw quiet"; then
+    echo "kexec: failed to load the kernel, falling back"
+    return 1
+  fi
+
+  echo "kexec: jumping into the new kernel"
+  sync
+  umount "$mnt" 2>/dev/null
+  kexec -e
+  echo "kexec: failed to execute the new kernel, falling back"
+  kexec -u 2>/dev/null
+  mount "$target" "$mnt" #we unmounted it above, the normal boot path still needs it
+  return 1
+}
+
 boot_target() {
   local target="$1"
 
@@ -300,6 +418,9 @@ boot_target() {
     mount /dev/mapper/rootfs /newroot
   else
     mount $target /newroot
+    if try_kexec "$target" /newroot; then
+      return 0
+    fi
   fi
   #bind mount /dev/console to show systemd boot msgs
   if [ -f "/bin/frecon-lite" ]; then 
@@ -392,6 +513,21 @@ main() {
   enable_debug_console "$TTY2"
 
   local valid_partitions="$(find_all_partitions)"
+
+  #boot automatically unless a key is pressed, this only happens once so
+  #that backing out of the menu or a failed boot doesn't loop
+  if [ "${AUTOBOOT_TIMEOUT:-0}" -gt 0 ] 2>/dev/null; then
+    local auto="$(pick_autoboot "$valid_partitions")"
+    if [ "$auto" ]; then
+      local auto_path=$(echo $auto | cut -d ":" -f 1)
+      local auto_name=$(echo $auto | cut -d ":" -f 2)
+      if autoboot_countdown "$AUTOBOOT_TIMEOUT" "$auto_name on $auto_path"; then
+        boot_target "$auto_path"
+        echo "autoboot failed, showing the menu"
+        sleep 2
+      fi
+    fi
+  fi
 
   while true; do
     clear

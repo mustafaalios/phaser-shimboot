@@ -1,0 +1,96 @@
+#!/bin/bash
+
+#copy the running shimboot (or UEFI) system from a usb drive to the internal emmc
+#this ERASES the target disk, including chrome os
+
+set -e
+if [ "$EUID" -ne 0 ]; then
+  echo "This needs to be run as root."
+  exit 1
+fi
+for cmd in sfdisk lsblk rsync blkid mkfs.ext4 findmnt; do
+  command -v "$cmd" >/dev/null || { echo "missing command: $cmd (try: apt install rsync fdisk)"; exit 1; }
+done
+
+root_part="$(findmnt -no SOURCE /)"
+if [[ "$root_part" == /dev/mapper/* ]]; then
+  echo "Encrypted (luks) rootfs partitions can't be installed with this script."
+  exit 1
+fi
+src_disk="/dev/$(lsblk -no PKNAME "$root_part" | head -n1)"
+
+#the internal disk is the emmc / nvme / non-removable disk that isn't the one we booted from
+dst_disk="$1"
+if [ -z "$dst_disk" ]; then
+  for d in /sys/block/mmcblk* /sys/block/nvme*n*; do
+    [ -e "$d" ] || continue
+    name="$(basename "$d")"
+    [[ "$name" == *boot* ]] && continue
+    [ "/dev/$name" = "$src_disk" ] && continue
+    if [[ "$name" == nvme* ]] || [ "$(cat "$d/device/type" 2>/dev/null)" = "MMC" ]; then
+      dst_disk="/dev/$name"
+      break
+    fi
+  done
+fi
+if [ -z "$dst_disk" ] || [ ! -b "$dst_disk" ]; then
+  echo "Couldn't find the internal disk. Pass it explicitly: install_to_internal /dev/mmcblk0"
+  exit 1
+fi
+if [ "$dst_disk" = "$src_disk" ]; then
+  echo "The target is the disk you booted from."
+  exit 1
+fi
+if grep -q "^$dst_disk" /proc/mounts; then
+  echo "$dst_disk has mounted partitions, refusing."
+  exit 1
+fi
+
+echo "Source: $src_disk"
+lsblk -o NAME,SIZE,FSTYPE,PARTLABEL "$src_disk"
+echo
+echo "Target: $dst_disk"
+lsblk -o NAME,SIZE,FSTYPE,PARTLABEL "$dst_disk"
+echo
+echo "WARNING: everything on $dst_disk will be erased, including Chrome OS."
+echo "You can restore Chrome OS later with a recovery usb, and an enrolled device will"
+echo "re-enroll itself, but anything stored only on this device will be gone."
+read -p "Type the target disk name ($dst_disk) to continue: " confirm
+[ "$confirm" = "$dst_disk" ] || { echo "Cancelled."; exit 1; }
+
+part_dev() { case "$1" in *[0-9]) echo "${1}p$2" ;; *) echo "${1}$2" ;; esac; }
+root_num="${root_part##*[!0-9]}"
+
+#copy the partition table: new random partuuids (so the bootloader can tell the copies apart),
+#and no fixed last-lba / final size so the rootfs fills the whole target disk
+sfdisk -d "$src_disk" \
+  | grep -v '^last-lba' | grep -v '^first-lba' \
+  | sed -E 's/, *uuid=[^,]*//; /^label-id/d; /^device:/d' \
+  | awk -v rn="$(part_dev "$src_disk" "$root_num")" '{ if (index($0, rn) == 1) sub(/size= *[0-9]+, */, ""); print }' \
+  | sed -E "s#$src_disk#$dst_disk#g" \
+  | sfdisk --force "$dst_disk" >/dev/null
+partprobe "$dst_disk" 2>/dev/null || true
+sleep 2
+
+for src in $(lsblk -lno PATH "$src_disk" | tail -n +2); do
+  num="${src##*[!0-9]}"
+  dst="$(part_dev "$dst_disk" "$num")"
+  if [ "$src" = "$root_part" ]; then
+    echo "Copying the root filesystem to $dst..."
+    uuid="$(blkid -s UUID -o value "$src")"
+    mkfs.ext4 -q -F -U "$uuid" "$dst"
+    mkdir -p /mnt/install_target
+    mount "$dst" /mnt/install_target
+    rsync -aHAXx --info=progress2 / /mnt/install_target/
+    sync
+    umount /mnt/install_target
+  else
+    echo "Copying partition $num..."
+    dd if="$src" of="$dst" bs=4M status=none conv=fsync
+  fi
+done
+
+echo
+echo "Done. Remove the usb drive. If this is a shimboot (non-UEFI) install, the shim kernel"
+echo "still has to be started from external media with Esc+Refresh+Power; on custom UEFI"
+echo "firmware the internal disk will simply boot."

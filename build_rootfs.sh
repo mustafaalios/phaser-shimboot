@@ -14,6 +14,7 @@ print_help() {
   echo "  username        - The unprivileged user name for the new rootfs."
   echo "  user_passwd     - The password for the unprivileged user."
   echo "  disable_base    - Disable the base packages such as zram, cloud-utils, and command-not-found."
+  echo "  distro_kernel   - Install the distro's own kernel, initramfs and firmware (needed for kexec and UEFI boot)."
   echo "  arch            - The CPU architecture to build the rootfs for."
   echo "  distro          - The Linux distro to use. This should be either 'debian' or 'alpine'."
   echo "If you do not specify the hostname and credentials, you will be prompted for them later."
@@ -119,12 +120,13 @@ enable_root="${args['enable_root']}"
 username="${args['username']}"
 user_passwd="${args['user_passwd']}"
 disable_base="${args['disable_base']}"
+distro_kernel="${args['distro_kernel']}"
 
 chroot_command="$chroot_script \
   '$DEBUG' '$release_name' '$packages' \
   '$hostname' '$root_passwd' '$username' \
   '$user_passwd' '$enable_root' '$disable_base' \
-  '$arch'" 
+  '$arch' '$distro_kernel'" 
 
 LC_ALL=C chroot $rootfs_dir /bin/sh -c "${chroot_command}"
 

@@ -20,6 +20,7 @@ user_passwd="$7"
 enable_root="$8"
 disable_base_pkgs="$9"
 arch="${10}"
+distro_kernel="${11}"
 
 custom_repo="https://shimboot.ading.dev/debian"
 custom_repo_domain="shimboot.ading.dev"
@@ -90,6 +91,16 @@ if [ ! "$disable_base_pkgs" ]; then
     apt-file update
   else #old versions of command-not-found did not use apt-file
     apt-get update
+  fi
+fi
+
+#install the distro kernel, this is what runs after kexec and what UEFI images boot
+if [ "$distro_kernel" ]; then
+  if grep -q "ubuntu.com" /etc/apt/sources.list; then
+    apt-get install -y linux-generic initramfs-tools linux-firmware
+  else
+    apt-get install -y linux-image-$arch initramfs-tools firmware-linux firmware-sof-signed \
+      firmware-misc-nonfree firmware-iwlwifi firmware-realtek firmware-atheros
   fi
 fi
 
