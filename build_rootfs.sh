@@ -89,6 +89,10 @@ fi
 
 print_info "copying rootfs setup scripts"
 cp -arv rootfs/* "$rootfs_dir"
+if [ "$distro" = "alpine" ]; then
+  #openrc init scripts must not exist on systemd distros, or systemctl enable tries to treat them as sysv scripts
+  cp -arv rootfs_alpine/* "$rootfs_dir"
+fi
 cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf"
 
 print_info "creating bind mounts for chroot"
