@@ -28,7 +28,12 @@ sudo ./build_uefi.sh data/uefi.bin
 - This builds a normal GPT/GRUB-EFI Debian image with the distro kernel and no shim, then boots it from USB or the internal disk like any PC.
 - Hardware steps:
   1. Find your board name on the recovery screen (bottom of the screen, first part of the HWID) and check it on the [MrChromebox supported devices list](https://docs.mrchromebox.tech/docs/supported-devices.html). That page also lists your device's write-protect method (battery disconnect, a jumper, or a screw), and the [write-protect guide](https://docs.mrchromebox.tech/docs/firmware/wp/disabling.html) covers the procedure.
-  2. Disable write-protect.
+  2. Fully disable write-protect. All three of these are needed, and disconnecting the battery only does the first:
+     1. **Hardware**: the GSC/Cr50 write-protect state. On Phaser that means disconnecting the battery, with the charger plugged in. SuzyQ/CCD isn't an option because it needs dev mode.
+     2. **Software**: write-protect on the flash chip itself.
+     3. **Protected range**: clear it, with start and end both set to 0.
+
+     The firmware script normally handles 2 and 3 itself. To check by hand, run `flashrom -p internal --wp-status`, then `flashrom -p internal --wp-disable` and `flashrom -p internal --wp-range 0,0`. The exact flags differ between flashrom versions (older ones use `--wp-range 0 0`), so check `flashrom --help`. Status should read disabled with a range of start=0x000000 and len=0x000000 before you flash.
   3. Run the firmware utility script and **back up the stock firmware** when it offers to. Keep that backup somewhere safe.
   4. Flash the UEFI Full ROM.
   5. Write `uefi.bin` to a USB drive, boot it, then run `install_to_internal` to copy it to the eMMC.
