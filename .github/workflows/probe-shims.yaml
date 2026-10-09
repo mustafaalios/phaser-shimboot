@@ -1,0 +1,16 @@
+name: probe-shim-kernels
+run-name: Print the kernel version of several boards' RMA shims
+on:
+  push:
+    paths:
+      - tools/probe_shim_kernels.py
+      - .github/workflows/probe-shims.yaml
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe kernels
+        run: python3 -I tools/probe_shim_kernels.py octopus coral grunt zork hatch puff dedede volteer drallion brya nissa
