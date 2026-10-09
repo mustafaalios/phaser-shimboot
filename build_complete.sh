@@ -249,7 +249,7 @@ if [ ! "$rootfs_dir" ]; then
   mkdir -p $rootfs_dir
 
   if [ "$distro" = "debian" ]; then
-    release="${release:-bookworm}"
+    release="${release:-trixie}"
   elif [ "$distro" = "ubuntu" ]; then
     release="${release:-noble}"
   elif [ "$distro" = "alpine" ]; then

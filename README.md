@@ -12,7 +12,7 @@ sudo ./build_complete.sh octopus          # distro_kernel=true is the default on
 ```
 
 - The image still has to be booted from external media with **Esc + Refresh + Power** (recovery mode). The firmware only accepts the shim's Google-signed kernel in recovery mode and only from removable media. Dev mode is blocked on an enrolled device, so software can't change this.
-- The shim's 4.14 kernel is used only to start. The bootloader then `kexec`s into the distro's own kernel from the rootfs (Debian 12 ships 6.1 and Debian 13 ships 6.12).
+- The shim's 4.14 kernel is used only to start. The bootloader then `kexec`s into the distro's own kernel from the rootfs (the default release is Debian 13 trixie, which ships Linux 6.12 LTS; `release=bookworm` gives 6.1).
   - It falls back to the old shim-kernel boot if the shim kernel has no `CONFIG_KEXEC`, if `kexec` fails, or if the rootfs is LUKS-encrypted.
   - Check kexec support on the device with `ls /sys/kernel/kexec_loaded` from the bootloader shell (`s` in the menu).
 - The bootloader boots by itself after a countdown (default 5s, press any key for the menu) and prefers the internal eMMC over USB/SD. Edit `bootloader/opt/shimboot.conf` to change `AUTOBOOT_TIMEOUT`, `AUTOBOOT_PREFER` and `USE_KEXEC`.
