@@ -1,0 +1,12 @@
+[Unit]
+Description=expand the root filesystem to fill the disk on first boot
+ConditionPathExists=!/var/lib/shimboot-expanded
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/expand_rootfs -y
+ExecStartPost=/usr/bin/touch /var/lib/shimboot-expanded
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

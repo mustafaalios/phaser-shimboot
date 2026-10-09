@@ -44,6 +44,8 @@ rc-update add savecache shutdown
 rc-update add seedrng boot
 rc-update add swap boot
 rc-update add syslog boot
+rc-update add expand-rootfs boot
+rc-update add fix-charging default
 
 #add service to kill frecon
 echo "#!/sbin/openrc-run
@@ -73,8 +75,14 @@ done
 #install base packages
 if [ -z "$disable_base_pkgs" ]; then
   #install various packages
-  apk add elogind polkit-elogind udisks2 polkit-elogind sudo zram-init networkmanager networkmanager-tui networkmanager-wifi network-manager-applet wpa_supplicant adw-gtk3 cloud-utils-growpart nano mousepad
+  apk add elogind polkit-elogind udisks2 polkit-elogind sudo zram-init networkmanager networkmanager-tui networkmanager-wifi network-manager-applet wpa_supplicant adw-gtk3 cloud-utils-growpart bash e2fsprogs-extra util-linux fdisk nano mousepad
   
+  #keep the clock correct: sync from ntp and always step it, even for large offsets
+  apk add chrony
+  sed -i '/^makestep/d' /etc/chrony/chrony.conf
+  echo "makestep 1 -1" >> /etc/chrony/chrony.conf
+  rc-update add chronyd default
+
   #start desktop services
   rc-update add networkmanager default
   rc-update add wpa_supplicant default

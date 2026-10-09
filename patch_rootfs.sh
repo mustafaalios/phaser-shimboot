@@ -10,7 +10,7 @@ print_help() {
 }
 
 assert_root
-assert_deps "git gunzip depmod"
+assert_deps "git gunzip depmod readelf"
 assert_args "$3"
 
 copy_modules() {
@@ -59,6 +59,55 @@ download_firmware() {
   git clone --branch master --depth=1 "${firmware_url}" $firmware_path
 }
 
+#copy ectool and the shared libraries it needs out of the recovery image, so that
+#the charging fix can talk to the embedded controller
+copy_ectool() {
+  local reco_rootfs=$(realpath -m $1)
+  local target_rootfs=$(realpath -m $2)
+  local ectool_src="${reco_rootfs}/usr/sbin/ectool"
+  local lib_dir="${target_rootfs}/usr/local/lib/shimboot-ectool"
+
+  if [ ! -f "$ectool_src" ]; then
+    echo "warning: ectool was not found in the recovery image, skipping the charging fix"
+    return 0
+  fi
+
+  mkdir -p "$lib_dir"
+  cp "$ectool_src" "$lib_dir/ectool.real"
+  chmod +x "$lib_dir/ectool.real"
+
+  #walk the NEEDED entries, skipping the core libc libraries since the rootfs provides those
+  local queue="$ectool_src"
+  local seen=""
+  while [ "$queue" ]; do
+    local current="${queue%% *}"
+    if [ "$current" = "$queue" ]; then queue=""; else queue="${queue#* }"; fi
+    local needed="$(readelf -d "$current" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')"
+    for lib in $needed; do
+      case "$lib" in
+        libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*|ld-linux*|libgcc_s.so*|libstdc++.so*) continue ;;
+      esac
+      case " $seen " in *" $lib "*) continue ;; esac
+      seen="$seen $lib"
+      local found="$(find "$reco_rootfs/lib64" "$reco_rootfs/usr/lib64" "$reco_rootfs/lib" "$reco_rootfs/usr/lib" -name "$lib" 2>/dev/null | head -n1)"
+      if [ "$found" ]; then
+        cp -L "$found" "$lib_dir/$lib"
+        queue="$queue $lib_dir/$lib"
+      else
+        echo "warning: could not find $lib for ectool"
+      fi
+    done
+  done
+
+  #the wrapper makes ectool find the bundled libraries
+  cat > "${target_rootfs}/usr/local/bin/ectool" << 'EOF'
+#!/bin/sh
+export LD_LIBRARY_PATH="/usr/local/lib/shimboot-ectool${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /usr/local/lib/shimboot-ectool/ectool.real "$@"
+EOF
+  chmod +x "${target_rootfs}/usr/local/bin/ectool"
+}
+
 shim_path=$(realpath -m $1)
 reco_path=$(realpath -m $2)
 target_rootfs=$(realpath -m $3)
@@ -75,6 +124,9 @@ safe_mount "${reco_loop}p3" $reco_rootfs ro
 
 echo "copying modules to rootfs"
 copy_modules $shim_rootfs $reco_rootfs $target_rootfs
+
+echo "copying ectool"
+copy_ectool $reco_rootfs $target_rootfs
 
 echo "downloading misc firmware"
 copy_firmware $target_rootfs

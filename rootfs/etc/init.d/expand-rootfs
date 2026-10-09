@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+description="expand the root filesystem to fill the disk on first boot"
+
+depend() {
+  need localmount
+}
+
+start() {
+  [ -e /var/lib/shimboot-expanded ] && return 0
+  ebegin "expanding the root filesystem"
+  /usr/local/bin/expand_rootfs -y && touch /var/lib/shimboot-expanded
+  eend $?
+}

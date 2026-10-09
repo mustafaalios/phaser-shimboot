@@ -14,7 +14,6 @@ print_help() {
   echo "  username        - The unprivileged user name for the new rootfs."
   echo "  user_passwd     - The password for the unprivileged user."
   echo "  disable_base    - Disable the base packages such as zram, cloud-utils, and command-not-found."
-  echo "  arch            - The CPU architecture to build the rootfs for."
   echo "  distro          - The Linux distro to use. This should be either 'debian' or 'alpine'."
   echo "If you do not specify the hostname and credentials, you will be prompted for them later."
 }
@@ -27,7 +26,7 @@ parse_args "$@"
 rootfs_dir=$(realpath -m "${1}")
 release_name="${2}"
 packages="${args['custom_packages']-task-xfce-desktop}"
-arch="${args['arch']-amd64}"
+arch="amd64"
 distro="${args['distro']-debian}"
 chroot_mounts="proc sys dev run"
 
@@ -60,17 +59,6 @@ if [ "$distro" = "debian" ]; then
   debootstrap --arch $arch --components=main,contrib,non-free,non-free-firmware "$release_name" "$rootfs_dir" http://deb.debian.org/debian/
   chroot_script="/opt/setup_rootfs.sh"
 
-elif [ "$distro" = "ubuntu" ]; then 
-  print_info "bootstraping ubuntu chroot"
-  repo_url="http://archive.ubuntu.com/ubuntu"
-  if [ "$arch" = "amd64" ]; then
-    repo_url="http://archive.ubuntu.com/ubuntu"
-  else 
-    repo_url="http://ports.ubuntu.com"
-  fi
-  debootstrap --arch $arch "$release_name" "$rootfs_dir" "$repo_url"
-  chroot_script="/opt/setup_rootfs.sh"
-
 elif [ "$distro" = "alpine" ]; then
   print_info "downloading alpine package list"
   pkg_list_url="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/"
@@ -86,12 +74,8 @@ elif [ "$distro" = "alpine" ]; then
   tar --warning=no-unknown-keyword -xzf "$pkg_dl_path" -C "$pkg_extract_dir"
 
   print_info "bootstraping alpine chroot"
-  real_arch="x86_64"
-  if [ "$arch" = "arm64" ]; then 
-    real_arch="aarch64"
-  fi
   $apk_static \
-    --arch $real_arch \
+    --arch x86_64 \
     -X http://dl-cdn.alpinelinux.org/alpine/$release_name/main/ \
     -U --allow-untrusted \
     --root "$rootfs_dir" \

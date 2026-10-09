@@ -33,7 +33,10 @@ echo
 echo "Automatically detected root partition:"
 fdisk -l "$disk_dev" 2>/dev/null | grep "${part_dev}"
 echo
-read -p "Press enter to continue, or ctr+c to cancel. "
+#pass -y (used by the first boot service) to skip the confirmation
+if [ "$1" != "-y" ]; then
+  read -p "Press enter to continue, or ctr+c to cancel. "
+fi
 
 echo
 echo "Before:"

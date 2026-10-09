@@ -10,13 +10,12 @@ print_help() {
   echo "Usage: ./build.sh output_path shim_path rootfs_dir"
   echo "Valid named arguments (specify with 'key=value'):"
   echo "  quiet - Don't use progress indicators which may clog up log files."
-  echo "  arch  - Set this to 'arm64' to specify that the shim is for an ARM chromebook."
   echo "  name  - The name for the shimboot rootfs partition."
-  echo "  luks  - Set this argument to encrypt the rootfs partition. Currently not available on arm64-based chromebooks."
+  echo "  luks  - Set this argument to encrypt the rootfs partition."
 }
 
 assert_root
-assert_deps "cpio binwalk pcregrep realpath cgpt mkfs.ext4 mkfs.ext2 fdisk lz4"
+assert_deps "cpio binwalk pcregrep realpath cgpt mkfs.ext4 mkfs.ext2 fdisk"
 assert_args "$3"
 parse_args "$@"
 
@@ -25,7 +24,6 @@ shim_path="$(realpath -m "${2}")"
 rootfs_dir="$(realpath -m "${3}")"
 
 quiet="${args['quiet']}"
-arch="${args['arch']-amd64}"
 bootloader_part_name="${args['name']}"
 luks_enabled="${args['luks']}"
 
@@ -42,7 +40,7 @@ if [ "$luks_enabled" ]; then
   print_info "downloading shimboot-binaries"
   temp_shimboot_binaries="/tmp/shimboot-binaries.tar.gz"
   #download the tar into /tmp before extracting cryptsetup
-  wget -q --show-progress "https://github.com/ading2210/shimboot-binaries/releases/latest/download/shimboot_binaries_$arch.tar.gz" -O "$temp_shimboot_binaries"
+  wget -q --show-progress "https://github.com/ading2210/shimboot-binaries/releases/latest/download/shimboot_binaries_amd64.tar.gz" -O "$temp_shimboot_binaries"
   #extract cryptsetup and delete the archive
   tar -xf "$temp_shimboot_binaries" -C $(realpath -m "bootloader/bin/") "cryptsetup"
   rm "$temp_shimboot_binaries"
@@ -53,7 +51,7 @@ print_info "reading the shim image"
 initramfs_dir=/tmp/shim_initramfs
 kernel_img=/tmp/kernel.img
 rm -rf "$initramfs_dir" "$kernel_img"
-extract_initramfs_full "$shim_path" "$initramfs_dir" "$kernel_img" "$arch"
+extract_initramfs_full "$shim_path" "$initramfs_dir" "$kernel_img"
 
 print_info "patching initramfs"
 patch_initramfs "$initramfs_dir"

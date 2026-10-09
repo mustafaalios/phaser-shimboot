@@ -35,38 +35,10 @@ Pin: origin ${custom_repo_domain}
 Pin-Priority: 1001
 END
 
-#enable i386 arch so that steam works 
-if [ "$arch" = "amd64" ]; then
-  dpkg --add-architecture i386
-fi
-
 
 #install certs to prevent apt ssl errors
 apt-get install -y ca-certificates
 apt-get update
-
-#fix apt repos for ubuntu
-if grep "ubuntu.com" /etc/apt/sources.list > /dev/null; then
-  ubuntu_repo="$(grep "ubuntu.com" /etc/apt/sources.list)"
-  ubuntu_repo="$ubuntu_repo universe"
-  updates_repo="$(echo "$ubuntu_repo" | sed "s/$release_name/$release_name-updates/")"
-  sed -i '/ubuntu.com/d' /etc/apt/sources.list
-  echo "$ubuntu_repo" >> /etc/apt/sources.list
-  echo "$updates_repo" >> /etc/apt/sources.list
-
-  #install the mozilla apt repo to avoid using snap for firefox
-  apt-get install -y wget gpg
-  install -d -m 0755 /etc/apt/keyrings 
-  wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- > /etc/apt/keyrings/packages.mozilla.org.asc
-  gpg -n -q --import --import-options import-show /etc/apt/keyrings/packages.mozilla.org.asc | awk '/pub/{getline; gsub(/^ +| +$/,""); if($0 == "35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3") print "\nThe key fingerprint matches ("$0").\n"; else print "\nVerification failed: the fingerprint ("$0") does not match the expected one.\n"}' 
-  echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" >> /etc/apt/sources.list.d/mozilla.list
-  echo '
-Package: *
-Pin: origin packages.mozilla.org
-Pin-Priority: 1000
-' > /etc/apt/preferences.d/mozilla 
-  apt-get update
-fi
 
 #install the patched systemd
 apt-get upgrade -y --allow-downgrades
@@ -76,10 +48,18 @@ apt-get install -y --reinstall --allow-downgrades $installed_systemd
 
 #enable shimboot services
 systemctl enable kill-frecon.service
+systemctl enable expand-rootfs.service
+systemctl enable fix-charging.service
 
 #install base packages
 if [ ! "$disable_base_pkgs" ]; then
-  apt-get install -y cloud-utils zram-tools sudo command-not-found bash-completion libfuse2 libfuse3-*
+  apt-get install -y cloud-utils zram-tools sudo command-not-found bash-completion libfuse2 libfuse3-* systemd-timesyncd
+
+  #keep the clock correct: the rtc can be invalid after a power loss, and without
+  #ntp systemd falls back to a fixed build date
+  systemctl enable systemd-timesyncd.service
+  #trim the emmc weekly
+  systemctl enable fstrim.timer
 
   #set up zram
   echo "ALGO=lzo" >> /etc/default/zramswap

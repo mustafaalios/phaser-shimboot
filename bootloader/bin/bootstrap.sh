@@ -44,6 +44,28 @@ get_part_dev() {
   fi
 }
 
+#a disk is the internal emmc if the mmc subsystem reports it as type MMC (sd cards report SD)
+is_emmc_disk() {
+  local name="$(basename "$1")"
+  case "$name" in
+    mmcblk[0-9]|mmcblk[0-9][0-9]) ;;
+    *) return 1 ;;
+  esac
+  [ "$(cat "/sys/block/$name/device/type" 2>/dev/null)" = "MMC" ]
+}
+
+find_emmc_disk() {
+  for sys_disk in /sys/block/mmcblk*; do
+    local disk="/dev/$(basename "$sys_disk")"
+    if is_emmc_disk "$disk"; then
+      echo "$disk"
+      return 0
+    fi
+  done
+  return 1
+}
+
+#prints one "device:name" line per shimboot rootfs, with ":internal" appended if it lives on the emmc
 find_rootfs_partitions() {
   local disks=$(fdisk -l | sed -n "s/Disk \(\/dev\/.*\):.*/\1/p")
   if [ ! "${disks}" ]; then
@@ -55,32 +77,14 @@ find_rootfs_partitions() {
     if [ ! "${partitions}" ]; then
       continue
     fi
+    local flag=""
+    if is_emmc_disk "$disk"; then
+      flag=":internal"
+    fi
     for partition in $partitions; do
-      get_part_dev "$disk" "$partition"
+      echo "$(get_part_dev "$disk" "$partition")${flag}"
     done
   done
-}
-
-find_chromeos_partitions() {
-  local roota_partitions="$(cgpt find -l ROOT-A)"
-  local rootb_partitions="$(cgpt find -l ROOT-B)"
-
-  if [ "$roota_partitions" ]; then
-    for partition in $roota_partitions; do
-      echo "${partition}:ChromeOS_ROOT-A:CrOS"
-    done
-  fi
-  
-  if [ "$rootb_partitions" ]; then
-    for partition in $rootb_partitions; do
-      echo "${partition}:ChromeOS_ROOT-B:CrOS"
-    done
-  fi
-}
-
-find_all_partitions() {
-  echo "$(find_chromeos_partitions)"
-  echo "$(find_rootfs_partitions)"
 }
 
 #from original bootstrap.sh
@@ -141,6 +145,9 @@ print_selector() {
     echo "no bootable partitions found. please see the shimboot documentation to mark a partition as bootable."
   fi
 
+  if [ "$(find_emmc_disk)" ]; then
+    echo "i) install to internal storage (erases the emmc)"
+  fi
   echo "q) reboot"
   echo "s) enter a shell"
   echo "l) view license"
@@ -158,6 +165,9 @@ get_selection() {
     reset
     enable_debug_console "$TTY1"
     return 0
+  elif [ "$selection" = "i" ]; then
+    install_to_emmc "$rootfs_partitions"
+    return 1
   elif [ "$selection" = "l" ]; then
     clear
     print_license
@@ -177,17 +187,10 @@ get_selection() {
   for rootfs_partition in $rootfs_partitions; do
     local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
     local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
 
     if [ "$selection" = "$i" ]; then
       echo "selected $part_path"
-      if [ "$part_flags" = "CrOS" ]; then
-        echo "booting chrome os partition"
-        print_donor_selector "$rootfs_partitions"
-        get_donor_selection "$rootfs_partitions" "$part_path"
-      else
-        boot_target "$part_path"
-      fi
+      boot_target "$part_path"
       return 1
     fi
 
@@ -199,79 +202,103 @@ get_selection() {
   return 1
 }
 
-copy_progress() {
-  local source="$1"
-  local destination="$2"
-  mkdir -p "$destination"
-  tar -cf - -C "${source}" . | pv -f | tar -xf - -C "${destination}"
+#size of a block device in 512 byte sectors
+dev_sectors() {
+  cat "/sys/class/block/$(basename "$1")/size"
 }
 
-print_donor_selector() {
+#wipe the emmc, then clone the first external shimboot rootfs onto it
+install_to_emmc() {
   local rootfs_partitions="$1"
-  local i=1;
+  local emmc="$(find_emmc_disk)"
+  if [ ! "$emmc" ]; then
+    echo "no internal emmc found"
+    sleep 2
+    return 1
+  fi
 
-  echo "Choose a partition to copy firmware and modules from:";
-
+  #the source is the first rootfs that is not already on the emmc
+  local source="" source_name=""
   for rootfs_partition in $rootfs_partitions; do
-    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
-    local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
-
-    if [ "$part_flags" = "CrOS" ]; then
-      continue;
+    if [ "$(echo $rootfs_partition | cut -d ":" -f 3)" != "internal" ]; then
+      source="$(echo $rootfs_partition | cut -d ":" -f 1)"
+      source_name="$(echo $rootfs_partition | cut -d ":" -f 2)"
+      break
     fi
-
-    echo "${i}) ${part_name} on ${part_path}"
-    i=$((i+1))
   done
+  if [ ! "$source" ]; then
+    echo "no rootfs on the boot media to install from"
+    sleep 2
+    return 1
+  fi
+
+  local disk_sectors="$(dev_sectors "$emmc")"
+  local source_sectors="$(dev_sectors "$source")"
+  #leave 1MiB at the start and room for the backup gpt at the end
+  local part_start=2048
+  local part_sectors=$((disk_sectors - part_start - 2048))
+  if [ "$part_sectors" -lt "$source_sectors" ]; then
+    echo "the emmc is too small for this image"
+    sleep 2
+    return 1
+  fi
+
+  clear
+  echo "This will ERASE EVERYTHING on ${emmc}, including Chrome OS."
+  echo "The firmware and enrollment are not touched, and Chrome OS can be restored"
+  echo "later with a recovery usb. After installing, the boot media must stay"
+  echo "inserted to start the system."
+  echo
+  fdisk -l "$emmc" 2>/dev/null | head -n 4
+  echo
+  read -p "Type ERASE to continue, anything else cancels: " confirm
+  if [ "$confirm" != "ERASE" ]; then
+    echo "cancelled"
+    sleep 1
+    return 1
+  fi
+
+  echo "creating partition table"
+  cgpt create -z "$emmc" || return 1
+  cgpt create "$emmc" || return 1
+  cgpt add -i 1 -t 0FC63DAF-8483-4772-8E79-3D69D8477DE4 \
+    -b $part_start -s $part_sectors \
+    -l "shimboot_rootfs:${source_name}" "$emmc" || return 1
+  #writing the table with fdisk makes the kernel re-read it
+  echo w | fdisk "$emmc" >/dev/null 2>&1
+
+  local target="$(get_part_dev "$emmc" 1)"
+  local tries=0
+  while [ ! -b "$target" ] && [ "$tries" -lt 10 ]; do
+    mdev -s 2>/dev/null
+    sleep 1
+    tries=$((tries+1))
+  done
+  if [ ! -b "$target" ]; then
+    echo "partition $target did not appear"
+    sleep 3
+    return 1
+  fi
+
+  echo "copying $source to $target"
+  dd if="$source" bs=4M 2>/dev/null | pv -s $((source_sectors * 512)) | dd of="$target" bs=4M conv=fsync 2>/dev/null
+  sync
+
+  echo
+  echo "install finished. keep the boot media inserted; the system now boots from the emmc."
+  echo "the root filesystem will grow to fill the emmc on the first boot."
+  read -p "press [enter] to continue "
+  return 0
 }
 
-yes_no_prompt() {
-  local prompt="$1"
-  local var_name="$2"
-
-  while true; do
-    read -p "$prompt" temp_result
-
-    if [ "$temp_result" = "y" ] || [ "$temp_result" = "n" ]; then
-      #the busybox shell has no other way to declare a variable from a string
-      #the declare command and printf -v are both bashisms
-      eval "$var_name='$temp_result'"
-      return 0
-    else
-      echo "invalid selection"
-    fi
-  done
-}
-
-get_donor_selection() {
-  local rootfs_partitions="$1"
-  local target="$2"
-  local i=1;
-  read -p "Your selection: " selection
-
-  for rootfs_partition in $rootfs_partitions; do
-    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
-    local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
-
-    if [ "$part_flags" = "CrOS" ]; then
-      continue;
-    fi
-
-    if [ "$selection" = "$i" ]; then
-      echo "selected $part_path as the donor partition"
-      yes_no_prompt "would you like to spoof verified mode? this is useful if you're planning on using chrome os while enrolled. (y/n): " use_crossystem
-      yes_no_prompt "would you like to spoof an invalid hwid? this will forcibly prevent the device from being enrolled. (y/n): " invalid_hwid
-      boot_chromeos "$target" "$part_path" "$use_crossystem" "$invalid_hwid"
-    fi
-
-    i=$((i+1))
-  done
-
-  echo "invalid selection"
-  sleep 1
-  return 1
+#give the user a moment to interrupt before booting the installed system
+autoboot_wait() {
+  local seconds=3
+  echo "booting from internal storage in ${seconds}s. press any key for the menu."
+  if read -t $seconds -n 1 key; then
+    return 1
+  fi
+  return 0
 }
 
 exec_init() {
@@ -315,85 +342,25 @@ boot_target() {
   exec_init
 }
 
-boot_chromeos() {
-  local target="$1"
-  local donor="$2"
-  local use_crossystem="$3"
-  local invalid_hwid="$4"
-  
-  echo "mounting target"
-  mkdir /newroot
-  mount -o ro $target /newroot
-
-  echo "mounting tmpfs"
-  mount -t tmpfs -o mode=1777 none /newroot/tmp
-  mount -t tmpfs -o mode=0555 run /newroot/run
-  mkdir -p -m 0755 /newroot/run/lock
-
-  echo "mounting donor partition"
-  local donor_mount="/newroot/tmp/donor_mnt"
-  local donor_files="/newroot/tmp/donor"
-  mkdir -p $donor_mount
-  mount -o ro $donor $donor_mount
-  echo "copying modules and firmware to tmpfs (this may take a while)"
-  copy_progress $donor_mount/lib/modules $donor_files/lib/modules
-  copy_progress $donor_mount/lib/firmware $donor_files/lib/firmware
-  mount -o bind $donor_files/lib/modules /newroot/lib/modules
-  mount -o bind $donor_files/lib/firmware /newroot/lib/firmware
-  umount $donor_mount
-  rm -rf $donor_mount
-
-  if [ -e "/newroot/etc/init/tpm-probe.conf" ]; then
-    echo "applying chrome os flex patches"
-    mkdir -p /newroot/tmp/empty
-    mount -o bind /newroot/tmp/empty /sys/class/tpm
-
-    cat /newroot/etc/lsb-release | sed "s/DEVICETYPE=OTHER/DEVICETYPE=CHROMEBOOK/" > /newroot/tmp/lsb-release
-    mount -o bind /newroot/tmp/lsb-release /newroot/etc/lsb-release
-  fi
-
-  echo "patching chrome os rootfs"
-  cat /newroot/etc/ui_use_flags.txt | sed "/reven_branding/d" | sed "/os_install_service/d" > /newroot/tmp/ui_use_flags.txt
-  mount -o bind /newroot/tmp/ui_use_flags.txt /newroot/etc/ui_use_flags.txt
-
-  cp /opt/mount-encrypted /newroot/tmp/mount-encrypted
-  cp /newroot/usr/sbin/mount-encrypted /newroot/tmp/mount-encrypted.real
-  mount -o bind /newroot/tmp/mount-encrypted /newroot/usr/sbin/mount-encrypted
-  
-  cat /newroot/etc/init/boot-splash.conf | sed '/^script$/a \  pkill frecon-lite || true' > /newroot/tmp/boot-splash.conf
-  mount -o bind /newroot/tmp/boot-splash.conf /newroot/etc/init/boot-splash.conf
-  
-  if [ "$use_crossystem" = "y" ]; then
-    echo "patching crossystem"
-    cp /opt/crossystem /newroot/tmp/crossystem
-    if [ "$invalid_hwid" = "y" ]; then
-      sed -i 's/block_devmode/hwid/' /newroot/tmp/crossystem
-    fi
-
-    cp /newroot/usr/bin/crossystem /newroot/tmp/crossystem_old
-    mount -o bind /newroot/tmp/crossystem /newroot/usr/bin/crossystem
-  fi
-
-  echo "moving mounts"
-  move_mounts /newroot
-
-  echo "switching root"
-  mkdir -p /newroot/tmp/bootloader
-  pivot_root /newroot /newroot/tmp/bootloader
-
-  echo "starting init"
-  /sbin/modprobe zram
-  exec_init
-}
-
 main() {
   echo "starting the shimboot bootloader"
 
   enable_debug_console "$TTY2"
 
-  local valid_partitions="$(find_all_partitions)"
+  local autoboot_tried=""
 
   while true; do
+    #rescan every pass so a fresh emmc install shows up in the menu
+    local valid_partitions="$(find_rootfs_partitions)"
+
+    if [ ! "$autoboot_tried" ]; then
+      autoboot_tried=1
+      local internal="$(echo "$valid_partitions" | grep ":internal$" | head -n1)"
+      if [ "$internal" ] && autoboot_wait; then
+        boot_target "$(echo "$internal" | cut -d ":" -f 1)"
+      fi
+    fi
+
     clear
     print_selector "${valid_partitions}"
 
