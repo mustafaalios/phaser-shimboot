@@ -1,0 +1,3 @@
+# re-run the charging fix when a charger is plugged in or unplugged
+# (only for the charger supplies, so battery percentage updates do not trigger it)
+SUBSYSTEM=="power_supply", ACTION=="change", ATTR{type}=="Mains|USB", TAG+="systemd", ENV{SYSTEMD_WANTS}+="fix-charging.service"

@@ -4,7 +4,8 @@
 . ./image_utils.sh
 
 print_help() {
-  echo "Usage: ./build_complete.sh board_name"
+  echo "Usage: ./build_complete.sh"
+  echo "Builds a Shimboot image for the Lenovo 100e Chromebook Gen 2 (Phaser, octopus board)."
   echo "Valid named arguments (specify with 'key=value'):"
   echo "  compress_img - Compress the final disk image into a zip file. Set this to any value to enable this option."
   echo "  rootfs_dir   - Use a different rootfs for the build. The directory you select will be copied before any patches are applied."
@@ -12,83 +13,42 @@ print_help() {
   echo "  desktop      - The desktop environment to install. This defaults to 'xfce'. Valid options include:"
   echo "                   gnome, xfce, kde, lxde, gnome-flashback, cinnamon, mate, lxqt"
   echo "  data_dir     - The working directory for the scripts. This defaults to ./data"
-  echo "  arch         - The CPU architecture to build the shimboot image for. Set this to 'arm64' if you have an ARM Chromebook."
   echo "  release      - Set this to either 'bookworm', 'trixie', or 'unstable' to build for Debian 12, 13, or unstable."
-  echo "  distro       - The Linux distro to use. This should be either 'debian', 'ubuntu', or 'alpine'."
-  echo "  distro_kernel - Install the distro's own (much newer) kernel and kexec into it at boot. Defaults to true on amd64 debian/ubuntu."
+  echo "  distro_kernel - Install the distro's own (much newer) kernel and kexec into it at boot. Defaults to true on debian."
+  echo "  distro       - The Linux distro to use. This should be either 'debian' or 'alpine'."
   echo "  luks         - Set this argument to encrypt the rootfs partition."
 }
 
 assert_root
-assert_args "$1"
 parse_args "$@"
 
 base_dir="$(realpath -m  $(dirname "$0"))"
-board="$1"
+#this fork only targets the phaser (lenovo 100e gen 2), which uses the octopus shim
+board="octopus"
 
 compress_img="${args['compress_img']}"
 rootfs_dir="${args['rootfs_dir']}"
 quiet="${args['quiet']}"
 desktop="${args['desktop']-'xfce'}"
 data_dir="${args['data_dir']}"
-arch="${args['arch']-amd64}"
 release="${args['release']}"
+distro_kernel="${args['distro_kernel']}"
 distro="${args['distro']-debian}"
 luks="${args['luks']}"
-distro_kernel="${args['distro_kernel']}"
 
-#a list of all arm board names
-arm_boards="
-  corsola hana jacuzzi kukui strongbad nyan-big kevin bob
-  veyron-speedy veyron-jerry veyron-minnie scarlet elm
-  kukui peach-pi peach-pit stumpy daisy-spring trogdor
-"
-#a list of shims that have a patch for the sh1mmer vulnerability
-bad_boards="reef sand pyro"
-
-if grep -q "$board" <<< "$arm_boards" > /dev/null; then
-  print_info "automatically detected arm64 device name"
-  arch="arm64"
-fi
-if grep -q "$board" <<< "$bad_boards" > /dev/null; then
-  print_error "Warning: you are attempting to build Shimboot for a board which has a shim that includes a fix for the sh1mmer vulnerability. The resulting image will not boot if you are enrolled."
-  read -p "Press [enter] to continue "
-fi
-
-if [[ "$luks" == "true" && "$arch" == "arm64" ]]; then
-  print_error "Uh-oh, you are trying to use luks2 encryption on an arm64 board. Unfortunately, rootfs encryption is not available on arm64-based boards at this time. :("
-  exit
-fi
-
-kernel_arch="$(uname -m)"
-host_arch="unknown"
-if [ "$kernel_arch" = "x86_64" ]; then
-  host_arch="amd64"
-elif [ "$kernel_arch" = "aarch64" ]; then
-  host_arch="arm64"
-fi
-
-needed_deps="wget python3 unzip zip git debootstrap cpio binwalk pcregrep cgpt mkfs.ext4 mkfs.ext2 fdisk depmod findmnt lz4 pv cryptsetup"
+needed_deps="wget python3 unzip zip git debootstrap cpio binwalk pcregrep cgpt mkfs.ext4 mkfs.ext2 fdisk depmod findmnt pv cryptsetup"
 if [ "$(check_deps "$needed_deps")" ]; then
-  #install deps automatically on debian and ubuntu
+  #install deps automatically on debian
   if [ -f "/etc/debian_version" ]; then
     print_title "attempting to install build deps"
-    apt-get install wget python3 unzip zip debootstrap cpio binwalk pcregrep cgpt kmod pv lz4 cryptsetup -y
+    apt-get install wget python3 unzip zip debootstrap cpio binwalk pcregrep cgpt kmod pv cryptsetup -y
   fi
   assert_deps "$needed_deps"
 fi
 
-#install qemu-user-static on debian if needed
-if [ "$arch" != "$host_arch" ]; then
-  if [ -f "/etc/debian_version" ]; then
-    if ! dpkg --get-selections | grep -v deinstall | grep "qemu-user-static\|box64\|fex-emu" > /dev/null; then
-      print_info "automatically installing qemu-user-static because we are building for a different architecture"
-      apt-get install qemu-user-static binfmt-support -y
-    fi
-  else 
-    print_error "Warning: You are building an image for a different CPU architecture. It may fail if you do not have qemu-user-static installed."
-    sleep 1
-  fi
+#futility signs the kernel used for booting from the internal disk, the build still works without it
+if ! command -v futility >/dev/null 2>&1 && [ -f "/etc/debian_version" ]; then
+  apt-get install -y vboot-utils || print_error "could not install vboot-utils, the image will not be able to boot from the emmc by itself"
 fi
 
 cleanup_path=""
@@ -250,8 +210,6 @@ if [ ! "$rootfs_dir" ]; then
 
   if [ "$distro" = "debian" ]; then
     release="${release:-trixie}"
-  elif [ "$distro" = "ubuntu" ]; then
-    release="${release:-noble}"
   elif [ "$distro" = "alpine" ]; then
     release="${release:-edge}"
   else
@@ -260,7 +218,7 @@ if [ ! "$rootfs_dir" ]; then
   fi
 
   #install a newer debootstrap version if needed
-  if [ -f "/etc/debian_version" ] && [ "$distro" = "ubuntu" -o "$distro" = "debian" ]; then
+  if [ -f "/etc/debian_version" ] && [ "$distro" = "debian" ]; then
     if [ ! -f "/usr/share/debootstrap/scripts/$release" ]; then
       print_info "installing newer debootstrap version"
       mirror_url="https://deb.debian.org/debian/pool/main/d/debootstrap/"
@@ -271,7 +229,7 @@ if [ ! "$rootfs_dir" ]; then
     fi
   fi
 
-  if [ -z "$distro_kernel" ] && [ "$arch" = "amd64" ] && [ "$distro" != "alpine" ]; then
+  if [ -z "$distro_kernel" ] && [ "$distro" = "debian" ]; then
     distro_kernel="true"
   fi
   [ "$distro_kernel" = "false" ] && distro_kernel=""
@@ -281,26 +239,43 @@ if [ ! "$rootfs_dir" ]; then
     hostname=shimboot-$board \
     username=user \
     user_passwd=user \
-    arch=$arch \
     distro=$distro
 fi
 
 print_title "patching $distro rootfs"
 retry_cmd ./patch_rootfs.sh $shim_bin $reco_bin $rootfs_dir "quiet=$quiet"
 
+#when building for release (ci), free the space used by files that are no longer needed
+if [ "$compress_img" ]; then
+  rm -f "$reco_bin"
+  rm -rf /tmp/chromium-firmware
+fi
+
 print_title "building final disk image"
 final_image="$data_dir/shimboot_$board.bin"
 rm -rf $final_image
-retry_cmd ./build.sh $final_image $shim_bin $rootfs_dir "quiet=$quiet" "arch=$arch" "name=$distro" "luks=$luks"
+retry_cmd ./build.sh $final_image $shim_bin $rootfs_dir "quiet=$quiet" "name=$distro" "luks=$luks"
 print_info "build complete! the final disk image is located at $final_image"
+
+#a small image with only the boot partitions, to leave plugged in after installing to the emmc
+print_title "building boot-only disk image"
+boot_image="$data_dir/shimboot_${board}_boot.bin"
+rm -rf $boot_image
+retry_cmd ./build.sh $boot_image $shim_bin $rootfs_dir "quiet=$quiet" "bootonly=1" "luks=$luks"
+print_info "the boot-only disk image is located at $boot_image"
 
 print_title "cleaning up"
 clean_loops
+rm -rf /tmp/vboot_reference /tmp/vboot_devkeys /tmp/kernel_dev.img
+if [ "$compress_img" ]; then
+  rm -f "$shim_bin"
+fi
 
 if [ "$compress_img" ]; then
   image_zip="$data_dir/shimboot_$board.zip"
   print_title "compressing disk image into a zip file"
   zip -j $image_zip $final_image
+  zip -j "$data_dir/shimboot_${board}_boot.zip" $boot_image
   print_info "finished compressing the disk file"
   print_info "the finished zip file can be found at $image_zip" 
 fi

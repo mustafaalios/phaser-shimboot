@@ -1,0 +1,20 @@
+#!/bin/sh
+
+#the embedded controller only negotiates the full charger wattage (45w instead of 15w)
+#after it is queried over usb-pd, so this runs the same ectool commands that fix it by hand.
+#it runs at boot and whenever a charger is plugged in or unplugged.
+
+#the usb-c port the charger is on, override in /etc/default/fix-charging
+PD_PORT=0
+[ -f /etc/default/fix-charging ] && . /etc/default/fix-charging
+
+if ! command -v ectool >/dev/null 2>&1; then
+  logger -t fix_charging "ectool is not installed, nothing to do"
+  exit 0
+fi
+
+#give the controller a moment to finish negotiating after a plug event
+sleep 2
+
+logger -t fix_charging "$(ectool usbpdpower 2>&1 | tr '\n' ';')"
+logger -t fix_charging "$(ectool usbpd "$PD_PORT" 2>&1 | tr '\n' ';')"

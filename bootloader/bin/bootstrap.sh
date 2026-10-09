@@ -44,6 +44,28 @@ get_part_dev() {
   fi
 }
 
+#a disk is the internal emmc if the mmc subsystem reports it as type MMC (sd cards report SD)
+is_emmc_disk() {
+  local name="$(basename "$1")"
+  case "$name" in
+    mmcblk[0-9]|mmcblk[0-9][0-9]) ;;
+    *) return 1 ;;
+  esac
+  [ "$(cat "/sys/block/$name/device/type" 2>/dev/null)" = "MMC" ]
+}
+
+find_emmc_disk() {
+  for sys_disk in /sys/block/mmcblk*; do
+    local disk="/dev/$(basename "$sys_disk")"
+    if is_emmc_disk "$disk"; then
+      echo "$disk"
+      return 0
+    fi
+  done
+  return 1
+}
+
+#prints one "device:name" line per shimboot rootfs, with ":internal" appended if it lives on the emmc
 find_rootfs_partitions() {
   local disks=$(fdisk -l | sed -n "s/Disk \(\/dev\/.*\):.*/\1/p")
   if [ ! "${disks}" ]; then
@@ -55,32 +77,14 @@ find_rootfs_partitions() {
     if [ ! "${partitions}" ]; then
       continue
     fi
+    local flag=""
+    if is_emmc_disk "$disk"; then
+      flag=":internal"
+    fi
     for partition in $partitions; do
-      get_part_dev "$disk" "$partition"
+      echo "$(get_part_dev "$disk" "$partition")${flag}"
     done
   done
-}
-
-find_chromeos_partitions() {
-  local roota_partitions="$(cgpt find -l ROOT-A)"
-  local rootb_partitions="$(cgpt find -l ROOT-B)"
-
-  if [ "$roota_partitions" ]; then
-    for partition in $roota_partitions; do
-      echo "${partition}:ChromeOS_ROOT-A:CrOS"
-    done
-  fi
-  
-  if [ "$rootb_partitions" ]; then
-    for partition in $rootb_partitions; do
-      echo "${partition}:ChromeOS_ROOT-B:CrOS"
-    done
-  fi
-}
-
-find_all_partitions() {
-  echo "$(find_chromeos_partitions)"
-  echo "$(find_rootfs_partitions)"
 }
 
 #from original bootstrap.sh
@@ -95,8 +99,6 @@ move_mounts() {
 }
 
 #settings, overridable by editing /opt/shimboot.conf on the bootloader partition
-AUTOBOOT_TIMEOUT=5     #seconds to wait before booting automatically, 0 to disable
-AUTOBOOT_PREFER="internal" #"internal" prefers emmc/nvme/sata over usb and sd, "any" takes the first one found
 USE_KEXEC="auto"       #"auto" kexecs into the rootfs's own kernel when possible, "no" always uses the shim kernel
 [ -f /opt/shimboot.conf ] && . /opt/shimboot.conf
 
@@ -112,63 +114,6 @@ part_disk_name() {
 #get the partition number from a partition path
 part_number() {
   echo "$1" | sed 's/.*[^0-9]\([0-9]\+\)$/\1/'
-}
-
-#succeeds if the partition is on a fixed internal drive (emmc, nvme, sata) rather than usb or an sd card
-is_internal_part() {
-  local disk="$(part_disk_name "$1")"
-  [ -d "/sys/block/$disk" ] || return 1
-  case "$disk" in
-    nvme*) return 0 ;;
-    mmcblk*)
-      [ "$(cat /sys/block/$disk/device/type 2>/dev/null)" = "MMC" ] ;;
-    *)
-      [ "$(cat /sys/block/$disk/removable 2>/dev/null)" = "0" ] &&
-        ! readlink -f "/sys/block/$disk" | grep -q "/usb[0-9]" ;;
-  esac
-}
-
-#pick the partition to boot automatically, prints "path:name:flags" or nothing
-pick_autoboot() {
-  local rootfs_partitions="$1"
-  local first=""
-  for rootfs_partition in $rootfs_partitions; do
-    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
-    [ "$part_flags" = "CrOS" ] && continue
-    [ "$first" ] || first="$rootfs_partition"
-    if [ "$AUTOBOOT_PREFER" = "internal" ] && is_internal_part "$part_path"; then
-      echo "$rootfs_partition"
-      return 0
-    fi
-  done
-  #if internal was requested but only external drives exist, still boot the first
-  echo "$first"
-}
-
-#busybox may be built without read -t / -n, so test before relying on it
-read_timeout_supported() {
-  echo x | (read -t 1 -n 1 _k) 2>/dev/null
-}
-
-#wait for the given number of seconds, succeeds if no key was pressed
-autoboot_countdown() {
-  local seconds="$1"
-  local label="$2"
-  if ! read_timeout_supported; then
-    return 1
-  fi
-  local i="$seconds"
-  while [ "$i" -gt 0 ]; do
-    printf "\rbooting %s in %ss, press any key for the menu... " "$label" "$i"
-    if read -t 1 -n 1 _key; then
-      echo
-      return 1
-    fi
-    i=$((i-1))
-  done
-  echo
-  return 0
 }
 
 print_license() {
@@ -218,6 +163,9 @@ print_selector() {
     echo "no bootable partitions found. please see the shimboot documentation to mark a partition as bootable."
   fi
 
+  if [ "$(find_emmc_disk)" ]; then
+    echo "i) install to internal storage (erases the emmc)"
+  fi
   echo "q) reboot"
   echo "s) enter a shell"
   echo "l) view license"
@@ -235,6 +183,9 @@ get_selection() {
     reset
     enable_debug_console "$TTY1"
     return 0
+  elif [ "$selection" = "i" ]; then
+    install_to_emmc "$rootfs_partitions"
+    return 1
   elif [ "$selection" = "l" ]; then
     clear
     print_license
@@ -254,17 +205,10 @@ get_selection() {
   for rootfs_partition in $rootfs_partitions; do
     local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
     local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
 
     if [ "$selection" = "$i" ]; then
       echo "selected $part_path"
-      if [ "$part_flags" = "CrOS" ]; then
-        echo "booting chrome os partition"
-        print_donor_selector "$rootfs_partitions"
-        get_donor_selection "$rootfs_partitions" "$part_path"
-      else
-        boot_target "$part_path"
-      fi
+      boot_target "$part_path"
       return 1
     fi
 
@@ -276,79 +220,160 @@ get_selection() {
   return 1
 }
 
-copy_progress() {
+#size of a block device in 512 byte sectors
+dev_sectors() {
+  cat "/sys/class/block/$(basename "$1")/size"
+}
+
+#copy a block device to another one with a progress bar
+clone_partition() {
   local source="$1"
-  local destination="$2"
-  mkdir -p "$destination"
-  tar -cf - -C "${source}" . | pv -f | tar -xf - -C "${destination}"
-}
-
-print_donor_selector() {
-  local rootfs_partitions="$1"
-  local i=1;
-
-  echo "Choose a partition to copy firmware and modules from:";
-
-  for rootfs_partition in $rootfs_partitions; do
-    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
-    local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
-
-    if [ "$part_flags" = "CrOS" ]; then
-      continue;
-    fi
-
-    echo "${i}) ${part_name} on ${part_path}"
-    i=$((i+1))
-  done
-}
-
-yes_no_prompt() {
-  local prompt="$1"
-  local var_name="$2"
-
-  while true; do
-    read -p "$prompt" temp_result
-
-    if [ "$temp_result" = "y" ] || [ "$temp_result" = "n" ]; then
-      #the busybox shell has no other way to declare a variable from a string
-      #the declare command and printf -v are both bashisms
-      eval "$var_name='$temp_result'"
-      return 0
-    else
-      echo "invalid selection"
-    fi
-  done
-}
-
-get_donor_selection() {
-  local rootfs_partitions="$1"
   local target="$2"
-  local i=1;
-  read -p "Your selection: " selection
+  local bytes=$(($(dev_sectors "$source") * 512))
+  dd if="$source" bs=4M 2>/dev/null | pv -s "$bytes" | dd of="$target" bs=4M conv=fsync 2>/dev/null
+}
 
+wait_for_partition() {
+  local target="$1"
+  local tries=0
+  while [ ! -b "$target" ] && [ "$tries" -lt 10 ]; do
+    mdev -s 2>/dev/null
+    sleep 1
+    tries=$((tries+1))
+  done
+  [ -b "$target" ]
+}
+
+#wipe the emmc, then recreate the boot media's layout on it so the emmc can boot by itself:
+#1 stateful, 2 kernel, 3 bootloader, 4 rootfs
+install_to_emmc() {
+  local rootfs_partitions="$1"
+  local emmc="$(find_emmc_disk)"
+  if [ ! "$emmc" ]; then
+    echo "no internal emmc found"
+    sleep 2
+    return 1
+  fi
+
+  #the source is the first rootfs that is not already on the emmc
+  local source="" source_name=""
   for rootfs_partition in $rootfs_partitions; do
-    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
-    local part_name=$(echo $rootfs_partition | cut -d ":" -f 2)
-    local part_flags=$(echo $rootfs_partition | cut -d ":" -f 3)
-
-    if [ "$part_flags" = "CrOS" ]; then
-      continue;
+    if [ "$(echo $rootfs_partition | cut -d ":" -f 3)" != "internal" ]; then
+      source="$(echo $rootfs_partition | cut -d ":" -f 1)"
+      source_name="$(echo $rootfs_partition | cut -d ":" -f 2)"
+      break
     fi
+  done
+  if [ ! "$source" ]; then
+    echo "no rootfs on the boot media to install from"
+    sleep 2
+    return 1
+  fi
 
-    if [ "$selection" = "$i" ]; then
-      echo "selected $part_path as the donor partition"
-      yes_no_prompt "would you like to spoof verified mode? this is useful if you're planning on using chrome os while enrolled. (y/n): " use_crossystem
-      yes_no_prompt "would you like to spoof an invalid hwid? this will forcibly prevent the device from being enrolled. (y/n): " invalid_hwid
-      boot_chromeos "$target" "$part_path" "$use_crossystem" "$invalid_hwid"
+  #the other partitions come from the same disk as the rootfs
+  local source_disk="$(echo "$source" | sed 's/p\?[0-9]\+$//')"
+  local src_state="$(get_part_dev "$source_disk" 1)"
+  local src_kernel="$(get_part_dev "$source_disk" 2)"
+  local src_boot="$(get_part_dev "$source_disk" 3)"
+  for part in "$src_state" "$src_kernel" "$src_boot"; do
+    if [ ! -b "$part" ]; then
+      echo "unexpected layout on the boot media, $part is missing"
+      sleep 3
+      return 1
     fi
-
-    i=$((i+1))
   done
 
-  echo "invalid selection"
-  sleep 1
-  return 1
+  #sector layout, 1MiB aligned
+  local disk_sectors="$(dev_sectors "$emmc")"
+  local state_start=2048
+  local state_sectors=2048
+  local kernel_start=4096
+  local kernel_sectors=65536
+  local boot_start=$((kernel_start + kernel_sectors))
+  local boot_sectors="$(dev_sectors "$src_boot")"
+  local rootfs_start=$((boot_start + boot_sectors))
+  local rootfs_sectors="$(dev_sectors "$source")"
+  local rootfs_max=$((disk_sectors - rootfs_start - 2048))
+  if [ "$rootfs_max" -lt "$rootfs_sectors" ]; then
+    echo "the emmc is too small for this image"
+    sleep 2
+    return 1
+  fi
+
+  clear
+  echo "This will ERASE EVERYTHING on ${emmc}, including Chrome OS."
+  echo "The firmware and enrollment are not touched, and Chrome OS can be restored"
+  echo "later with a recovery usb."
+  echo
+  fdisk -l "$emmc" 2>/dev/null | head -n 4
+  echo
+  read -p "Type ERASE to continue, anything else cancels: " confirm
+  if [ "$confirm" != "ERASE" ]; then
+    echo "cancelled"
+    sleep 1
+    return 1
+  fi
+
+  echo "creating partition table"
+  local kernel_type="FE3A2A5D-4F32-41A7-B725-ACCC3285A309"
+  local rootfs_type="3CB8E202-3B7E-47DD-8A3C-7FF2A13CFCEC"
+  local data_type="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+  cgpt create -z "$emmc" || return 1
+  cgpt create "$emmc" || return 1
+  cgpt add -i 1 -t $data_type -b $state_start -s $state_sectors -l "stateful" "$emmc" || return 1
+  cgpt add -i 2 -t $kernel_type -b $kernel_start -s $kernel_sectors -l "kernel" -S 1 -T 5 -P 10 "$emmc" || return 1
+  cgpt add -i 3 -t $rootfs_type -b $boot_start -s $boot_sectors -l "bootloader" "$emmc" || return 1
+  cgpt add -i 4 -t $data_type -b $rootfs_start -s $((rootfs_max)) -l "shimboot_rootfs:${source_name}" "$emmc" || return 1
+  #writing the table with fdisk makes the kernel re-read it
+  echo w | fdisk "$emmc" >/dev/null 2>&1
+
+  local emmc_state="$(get_part_dev "$emmc" 1)"
+  local emmc_kernel="$(get_part_dev "$emmc" 2)"
+  local emmc_boot="$(get_part_dev "$emmc" 3)"
+  local emmc_rootfs="$(get_part_dev "$emmc" 4)"
+  for part in "$emmc_state" "$emmc_kernel" "$emmc_boot" "$emmc_rootfs"; do
+    if ! wait_for_partition "$part"; then
+      echo "partition $part did not appear"
+      sleep 3
+      return 1
+    fi
+  done
+
+  echo "copying the bootloader"
+  clone_partition "$src_state" "$emmc_state"
+  clone_partition "$src_boot" "$emmc_boot"
+
+  #the emmc gets a kernel signed for developer mode boots, if the image includes one
+  if [ -f /opt/kernel_dev.img ]; then
+    echo "writing the internal-boot kernel"
+    dd if=/opt/kernel_dev.img of="$emmc_kernel" bs=1M conv=fsync 2>/dev/null
+  else
+    echo "this image has no internal-boot kernel, copying the boot media kernel instead"
+    clone_partition "$src_kernel" "$emmc_kernel"
+  fi
+
+  echo "copying $source to $emmc_rootfs"
+  clone_partition "$source" "$emmc_rootfs"
+  sync
+
+  echo
+  echo "install finished. the root filesystem will grow to fill the emmc on the first boot."
+  echo
+  echo "to boot without the external drive: unplug it, reboot, and at the"
+  echo "'OS verification is OFF' screen press Ctrl+D. if the firmware refuses, the"
+  echo "external drive and Esc+Refresh+Power still work as before."
+  read -p "press [enter] to continue "
+  return 0
+}
+
+#give the user a moment to interrupt before booting the installed system
+autoboot_wait() {
+  local seconds=3
+  echo "booting from internal storage in ${seconds}s. press any key for the menu."
+  if read -t $seconds -n 1 key; then
+    return 1
+  fi
+  return 0
 }
 
 exec_init() {
@@ -436,100 +461,25 @@ boot_target() {
   exec_init
 }
 
-boot_chromeos() {
-  local target="$1"
-  local donor="$2"
-  local use_crossystem="$3"
-  local invalid_hwid="$4"
-  
-  echo "mounting target"
-  mkdir /newroot
-  mount -o ro $target /newroot
-
-  echo "mounting tmpfs"
-  mount -t tmpfs -o mode=1777 none /newroot/tmp
-  mount -t tmpfs -o mode=0555 run /newroot/run
-  mkdir -p -m 0755 /newroot/run/lock
-
-  echo "mounting donor partition"
-  local donor_mount="/newroot/tmp/donor_mnt"
-  local donor_files="/newroot/tmp/donor"
-  mkdir -p $donor_mount
-  mount -o ro $donor $donor_mount
-  echo "copying modules and firmware to tmpfs (this may take a while)"
-  copy_progress $donor_mount/lib/modules $donor_files/lib/modules
-  copy_progress $donor_mount/lib/firmware $donor_files/lib/firmware
-  mount -o bind $donor_files/lib/modules /newroot/lib/modules
-  mount -o bind $donor_files/lib/firmware /newroot/lib/firmware
-  umount $donor_mount
-  rm -rf $donor_mount
-
-  if [ -e "/newroot/etc/init/tpm-probe.conf" ]; then
-    echo "applying chrome os flex patches"
-    mkdir -p /newroot/tmp/empty
-    mount -o bind /newroot/tmp/empty /sys/class/tpm
-
-    cat /newroot/etc/lsb-release | sed "s/DEVICETYPE=OTHER/DEVICETYPE=CHROMEBOOK/" > /newroot/tmp/lsb-release
-    mount -o bind /newroot/tmp/lsb-release /newroot/etc/lsb-release
-  fi
-
-  echo "patching chrome os rootfs"
-  cat /newroot/etc/ui_use_flags.txt | sed "/reven_branding/d" | sed "/os_install_service/d" > /newroot/tmp/ui_use_flags.txt
-  mount -o bind /newroot/tmp/ui_use_flags.txt /newroot/etc/ui_use_flags.txt
-
-  cp /opt/mount-encrypted /newroot/tmp/mount-encrypted
-  cp /newroot/usr/sbin/mount-encrypted /newroot/tmp/mount-encrypted.real
-  mount -o bind /newroot/tmp/mount-encrypted /newroot/usr/sbin/mount-encrypted
-  
-  cat /newroot/etc/init/boot-splash.conf | sed '/^script$/a \  pkill frecon-lite || true' > /newroot/tmp/boot-splash.conf
-  mount -o bind /newroot/tmp/boot-splash.conf /newroot/etc/init/boot-splash.conf
-  
-  if [ "$use_crossystem" = "y" ]; then
-    echo "patching crossystem"
-    cp /opt/crossystem /newroot/tmp/crossystem
-    if [ "$invalid_hwid" = "y" ]; then
-      sed -i 's/block_devmode/hwid/' /newroot/tmp/crossystem
-    fi
-
-    cp /newroot/usr/bin/crossystem /newroot/tmp/crossystem_old
-    mount -o bind /newroot/tmp/crossystem /newroot/usr/bin/crossystem
-  fi
-
-  echo "moving mounts"
-  move_mounts /newroot
-
-  echo "switching root"
-  mkdir -p /newroot/tmp/bootloader
-  pivot_root /newroot /newroot/tmp/bootloader
-
-  echo "starting init"
-  /sbin/modprobe zram
-  exec_init
-}
-
 main() {
   echo "starting the shimboot bootloader"
 
   enable_debug_console "$TTY2"
 
-  local valid_partitions="$(find_all_partitions)"
-
-  #boot automatically unless a key is pressed, this only happens once so
-  #that backing out of the menu or a failed boot doesn't loop
-  if [ "${AUTOBOOT_TIMEOUT:-0}" -gt 0 ] 2>/dev/null; then
-    local auto="$(pick_autoboot "$valid_partitions")"
-    if [ "$auto" ]; then
-      local auto_path=$(echo $auto | cut -d ":" -f 1)
-      local auto_name=$(echo $auto | cut -d ":" -f 2)
-      if autoboot_countdown "$AUTOBOOT_TIMEOUT" "$auto_name on $auto_path"; then
-        boot_target "$auto_path"
-        echo "autoboot failed, showing the menu"
-        sleep 2
-      fi
-    fi
-  fi
+  local autoboot_tried=""
 
   while true; do
+    #rescan every pass so a fresh emmc install shows up in the menu
+    local valid_partitions="$(find_rootfs_partitions)"
+
+    if [ ! "$autoboot_tried" ]; then
+      autoboot_tried=1
+      local internal="$(echo "$valid_partitions" | grep ":internal$" | head -n1)"
+      if [ "$internal" ] && autoboot_wait; then
+        boot_target "$(echo "$internal" | cut -d ":" -f 1)"
+      fi
+    fi
+
     clear
     print_selector "${valid_partitions}"
 

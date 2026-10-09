@@ -1,0 +1,11 @@
+[Unit]
+Description=renegotiate usb-pd charging power
+StartLimitIntervalSec=30
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fix_charging
+
+[Install]
+WantedBy=multi-user.target

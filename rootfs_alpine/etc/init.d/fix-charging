@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+description="renegotiate usb-pd charging power"
+
+depend() {
+  after modules
+}
+
+start() {
+  ebegin "renegotiating usb-pd charging power"
+  /usr/local/bin/fix_charging
+  eend $?
+}
