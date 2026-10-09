@@ -42,7 +42,6 @@ jobs:
       - name: run build
         run: |
           sudo apt-get update
-          sudo apt-get upgrade -y
           sudo DEBUG=1 ./build_complete.sh compress_img=1 quiet=1
 
       - name: check kexec made it into the image
@@ -102,7 +101,7 @@ jobs:
       - name: run build
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap dosfstools fdisk pcregrep zip
+          sudo apt-get install -y debootstrap dosfstools fdisk pcregrep pv zip
           sudo DEBUG=1 ./build_uefi.sh data/shimboot_octopus_uefi.bin
           sudo zip -j data/shimboot_octopus_uefi.zip data/shimboot_octopus_uefi.bin
 
