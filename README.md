@@ -50,7 +50,9 @@ The shim's kernel is Linux 4.14, and the firmware will only start that one from 
 - **Untested on hardware.** Please report what `uname -r` shows and what the bootloader prints.
 
 ## Booting without the USB drive
-With stock firmware the USB cannot be avoided in recovery mode: the firmware only starts the Google-signed shim kernel from external media. The experimental internal boot (dev-key signed kernel on the eMMC, started with Ctrl+D) needs developer mode to accept it. Why it isn't working on an enrolled unit is still unconfirmed. Possible causes are enterprise firmware management parameters (FWMP) blocking dev boot or forcing official-only kernels. That is a guess, not something tested here.
+With stock firmware the USB cannot be avoided in recovery mode: the firmware only starts the Google-signed shim kernel from external media. The experimental internal boot (dev-key signed kernel on the eMMC, started with Ctrl+D) needs developer mode to accept it. On at least one enrolled Lenovo 100e Gen 2, Ctrl+D did nothing on either the 'OS verification is OFF' screen or the recovery screen, so the firmware is deciding this and software cannot override it without changing the firmware. Choosing `d` in the bootloader menu prints the firmware settings it can read (`crossystem` values, kexec support, disk layout) and saves them to `shimboot_diag.txt` on the boot drive, which narrows down why. Please attach that file to an issue.
+
+Why it isn't working on an enrolled unit is still unconfirmed. Possible causes are enterprise firmware management parameters (FWMP) blocking dev boot or forcing official-only kernels. That is a guess, not something tested here.
 
 ### With write-protect off: UEFI firmware (true auto-boot)
 ```bash

@@ -143,6 +143,70 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 EOF
 }
 
+#print facts about the firmware and boot setup, and save them to the boot media's stateful partition
+#so they can be read on another computer. useful for working out why internal boot is refused
+show_diagnostics() {
+  local out="/tmp/shimboot_diag.txt"
+  {
+    echo "== bootloader kernel"
+    uname -r
+    cat /proc/cmdline
+    echo
+    echo "== kexec"
+    [ -e /sys/kernel/kexec_loaded ] && echo "kernel supports kexec" || echo "kernel has NO kexec support"
+    command -v kexec >/dev/null && echo "kexec binary present" || echo "kexec binary missing"
+    echo
+    echo "== firmware (crossystem)"
+    if command -v crossystem >/dev/null 2>&1; then
+      for key in hwid fwid ro_fwid mainfw_type mainfw_act wpsw_cur devsw_boot devsw_cur \
+          dev_boot_signed_only dev_boot_usb dev_boot_legacy block_devmode recovery_reason \
+          recovery_request cros_debug tpm_fwver; do
+        echo "$key = $(crossystem $key 2>&1)"
+      done
+    else
+      echo "crossystem is not available in this environment"
+    fi
+    echo
+    echo "== tpm / security chip"
+    ls /sys/class/tpm 2>&1
+    echo
+    echo "== disks"
+    for disk in /dev/mmcblk[0-9] /dev/sd[a-z]; do
+      [ -b "$disk" ] || continue
+      echo "-- $disk"
+      cgpt show "$disk" 2>&1
+    done
+    echo
+    echo "== kernel messages"
+    dmesg 2>/dev/null | grep -iE 'kexec|lockdown|tpm|secure|verity|cr50|gsc' | tail -n 20
+  } > "$out" 2>&1
+
+  clear
+  cat "$out"
+
+  #save a copy to the stateful partition of the external boot media
+  local saved=""
+  for rootfs_partition in $(find_rootfs_partitions); do
+    local part_path=$(echo $rootfs_partition | cut -d ":" -f 1)
+    local disk="/dev/$(part_disk_name "$part_path")"
+    is_emmc_disk "$disk" && continue
+    local state="$(get_part_dev "$disk" 1)"
+    mkdir -p /tmp/diag_mnt
+    if [ -b "$state" ] && mount "$state" /tmp/diag_mnt 2>/dev/null; then
+      cp "$out" /tmp/diag_mnt/shimboot_diag.txt 2>/dev/null && saved="$state"
+      umount /tmp/diag_mnt
+    fi
+    break
+  done
+  echo
+  if [ "$saved" ]; then
+    echo "saved to shimboot_diag.txt on $saved (the 1MB partition 1 of the boot drive)"
+  else
+    echo "couldn't save to the boot drive; photograph this screen instead"
+  fi
+  read -p "press [enter] to return to the bootloader menu"
+}
+
 print_selector() {
   local rootfs_partitions="$1"
   local i=1
@@ -167,6 +231,7 @@ print_selector() {
     echo "i) install to internal storage (erases the emmc)"
   fi
   echo "q) reboot"
+  echo "d) diagnostics"
   echo "s) enter a shell"
   echo "l) view license"
 }
@@ -183,6 +248,9 @@ get_selection() {
     reset
     enable_debug_console "$TTY1"
     return 0
+  elif [ "$selection" = "d" ]; then
+    show_diagnostics
+    return 1
   elif [ "$selection" = "i" ]; then
     install_to_emmc "$rootfs_partitions"
     return 1
