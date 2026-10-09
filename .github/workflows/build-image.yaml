@@ -4,12 +4,17 @@ on:
   push:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     permissions:
       contents: write
 
-    strategy: 
+    strategy:
+      fail-fast: false
       matrix:
         board: [octopus]
 
@@ -23,7 +28,7 @@ jobs:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 4096
+          root-reserve-mb: 8192
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -35,7 +40,6 @@ jobs:
       - name: run build
         run: |
           sudo apt-get update
-          sudo apt-get upgrade -y
           sudo DEBUG=1 ./build_complete.sh ${{ matrix.board }} compress_img=1 quiet=1
 
       - name: upload img
@@ -66,7 +70,7 @@ jobs:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 4096
+          root-reserve-mb: 8192
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
