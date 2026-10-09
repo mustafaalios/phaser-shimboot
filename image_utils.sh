@@ -48,16 +48,18 @@ partition_disk() {
     echo #accept default parition number
     echo 3CB8E202-3B7E-47DD-8A3C-7FF2A13CFCEC #chromeos rootfs type
 
-    #create rootfs partition
-    echo n
-    echo #accept default parition number
-    echo #accept default first sector
-    echo #accept default size to fill rest of image
-    echo x #enter expert mode
-    echo n #change the partition name
-    echo #accept default partition number
-    echo "shimboot_rootfs:$rootfs_name" #set partition name
-    echo r #return to normal more
+    #create rootfs partition, unless this is a boot-only image
+    if [ "$rootfs_name" ]; then
+      echo n
+      echo #accept default parition number
+      echo #accept default first sector
+      echo #accept default size to fill rest of image
+      echo x #enter expert mode
+      echo n #change the partition name
+      echo #accept default partition number
+      echo "shimboot_rootfs:$rootfs_name" #set partition name
+      echo r #return to normal more
+    fi
 
     #write changes
     echo w
@@ -84,6 +86,7 @@ create_partitions() {
   local kernel_path=$(realpath -m "${2}")
   local is_luks="${3}"
   local crypt_password="${4}"
+  local bootonly="${5}"
 
   #create stateful
   mkfs.ext4 "${image_loop}p1"
@@ -93,6 +96,9 @@ create_partitions() {
   #create bootloader partition
   mkfs.ext2 "${image_loop}p3"
   #create rootfs partition
+  if [ "$bootonly" ]; then
+    return 0
+  fi
   if [ "$is_luks" ]; then
     echo "$crypt_password" | cryptsetup luksFormat "${image_loop}p4"
     echo "$crypt_password" | cryptsetup luksOpen "${image_loop}p4" rootfs
@@ -108,6 +114,7 @@ populate_partitions() {
   local rootfs_dir=$(realpath -m "${3}")
   local quiet="$4"
   local luks_enabled="$5"
+  local bootonly="$6"
 
   #figure out if we are on a stable release
   local git_tag="$(git tag -l --contains HEAD)"
@@ -129,6 +136,11 @@ populate_partitions() {
     printf "$git_hash" > "$bootloader_mount/opt/.shimboot_version_dev"
   fi
   umount "$bootloader_mount"
+
+  #a boot-only image has no rootfs partition
+  if [ "$bootonly" ]; then
+    return 0
+  fi
 
   #write rootfs to image
   local rootfs_mount=/tmp/new_rootfs

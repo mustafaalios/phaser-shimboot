@@ -239,6 +239,13 @@ rm -rf $final_image
 retry_cmd ./build.sh $final_image $shim_bin $rootfs_dir "quiet=$quiet" "name=$distro" "luks=$luks"
 print_info "build complete! the final disk image is located at $final_image"
 
+#a small image with only the boot partitions, to leave plugged in after installing to the emmc
+print_title "building boot-only disk image"
+boot_image="$data_dir/shimboot_${board}_boot.bin"
+rm -rf $boot_image
+retry_cmd ./build.sh $boot_image $shim_bin $rootfs_dir "quiet=$quiet" "bootonly=1" "luks=$luks"
+print_info "the boot-only disk image is located at $boot_image"
+
 print_title "cleaning up"
 clean_loops
 
@@ -246,6 +253,7 @@ if [ "$compress_img" ]; then
   image_zip="$data_dir/shimboot_$board.zip"
   print_title "compressing disk image into a zip file"
   zip -j $image_zip $final_image
+  zip -j "$data_dir/shimboot_${board}_boot.zip" $boot_image
   print_info "finished compressing the disk file"
   print_info "the finished zip file can be found at $image_zip" 
 fi

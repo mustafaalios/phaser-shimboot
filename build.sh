@@ -11,6 +11,7 @@ print_help() {
   echo "Valid named arguments (specify with 'key=value'):"
   echo "  quiet - Don't use progress indicators which may clog up log files."
   echo "  name  - The name for the shimboot rootfs partition."
+  echo "  bootonly - Build a small image with only the boot partitions and no rootfs. Used after installing to the internal eMMC."
   echo "  luks  - Set this argument to encrypt the rootfs partition."
 }
 
@@ -26,17 +27,20 @@ rootfs_dir="$(realpath -m "${3}")"
 quiet="${args['quiet']}"
 bootloader_part_name="${args['name']}"
 luks_enabled="${args['luks']}"
+bootonly="${args['bootonly']}"
 
 if [ "$luks_enabled" ]; then
-  while true; do
-    read -p "Enter the LUKS2 password for the image: " crypt_password
-    read -p "Retype the password: " crypt_password_confirm
-    if [ "$crypt_password" = "$crypt_password_confirm" ]; then
-      break
-    else
-      echo "Passwords do not match. Please try again."
-    fi
-  done
+  if [ ! "$bootonly" ]; then
+    while true; do
+      read -p "Enter the LUKS2 password for the image: " crypt_password
+      read -p "Retype the password: " crypt_password_confirm
+      if [ "$crypt_password" = "$crypt_password_confirm" ]; then
+        break
+      else
+        echo "Passwords do not match. Please try again."
+      fi
+    done
+  fi
   print_info "downloading shimboot-binaries"
   temp_shimboot_binaries="/tmp/shimboot-binaries.tar.gz"
   #download the tar into /tmp before extracting cryptsetup
@@ -59,6 +63,11 @@ patch_initramfs "$initramfs_dir"
 print_info "creating disk image"
 rootfs_size="$(du -sm $rootfs_dir | cut -f 1)"
 rootfs_part_size="$(($rootfs_size * 12 / 10 + 5))"
+if [ "$bootonly" ]; then
+  #no rootfs partition, just 1mb of room for the backup gpt
+  rootfs_part_size=1
+  bootloader_part_name=""
+fi
 #create a 20mb bootloader partition
 #rootfs partition is 20% larger than its contents
 create_image "$output_path" 20 "$rootfs_part_size" "$bootloader_part_name"
@@ -67,10 +76,10 @@ print_info "creating loop device for the image"
 image_loop="$(create_loop ${output_path})"
 
 print_info "creating partitions on the disk image"
-create_partitions "$image_loop" "$kernel_img" "$luks_enabled" "$crypt_password"
+create_partitions "$image_loop" "$kernel_img" "$luks_enabled" "$crypt_password" "$bootonly"
 
 print_info "copying data into the image"
-populate_partitions "$image_loop" "$initramfs_dir" "$rootfs_dir" "$quiet" "$luks_enabled"
+populate_partitions "$image_loop" "$initramfs_dir" "$rootfs_dir" "$quiet" "$luks_enabled" "$bootonly"
 rm -rf "$initramfs_dir" "$kernel_img"
 
 print_info "cleaning up loop devices"

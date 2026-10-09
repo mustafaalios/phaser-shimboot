@@ -38,6 +38,8 @@ Useful arguments: `distro=alpine`, `release=trixie`, `desktop=lxqt`, `luks=1`, `
 
 Installing erases Chrome OS. The firmware and enrollment status are not touched, and Chrome OS can be restored with a recovery USB.
 
+After installing, you no longer need the large image. Flash `shimboot_octopus_boot.bin` (about 55MB, boot partitions only, no rootfs) to any small USB stick and leave it plugged in. The firmware only starts the shim from external media, but everything else runs from the eMMC, so the stick can be a tiny flush drive.
+
 If the system fails to boot, type `rescue <number>` at the bootloader prompt to get a shell before init starts.
 
 ## Known limitations
