@@ -16,6 +16,7 @@ print_help() {
   echo "  release      - Set this to either 'bookworm', 'trixie', or 'unstable' to build for Debian 12, 13, or unstable."
   echo "  distro_kernel - Install the distro's own (much newer) kernel and kexec into it at boot. Defaults to true on debian."
   echo "  distro       - The Linux distro to use. This should be either 'debian' or 'alpine'."
+  echo "  shim_board   - Take the signed shim kernel from another board's RMA shim, e.g. 'nissa' (Linux 5.15) or 'dedede' (5.4). EXPERIMENTAL: the octopus firmware has to accept it. Defaults to octopus."
   echo "  luks         - Set this argument to encrypt the rootfs partition."
 }
 
@@ -35,6 +36,14 @@ release="${args['release']}"
 distro_kernel="${args['distro_kernel']}"
 distro="${args['distro']-debian}"
 luks="${args['luks']}"
+#the kernel that starts the bootloader comes from this board's shim, everything else stays octopus
+shim_board="${args['shim_board']-$board}"
+#image names get a suffix when the shim is not the octopus one
+if [ "$shim_board" = "$board" ]; then
+  image_tag="$board"
+else
+  image_tag="${board}_${shim_board}"
+fi
 
 needed_deps="wget python3 unzip zip git debootstrap cpio binwalk pcregrep cgpt mkfs.ext4 mkfs.ext2 fdisk depmod findmnt pv cryptsetup"
 if [ "$(check_deps "$needed_deps")" ]; then
@@ -91,9 +100,9 @@ print(reco_url)
 ' $board)"
 print_info "found url: $reco_url"
 
-shim_bin="$data_dir/shim_$board.bin"
-shim_zip="$data_dir/shim_$board.zip"
-shim_dir="$data_dir/shim_${board}_chunks"
+shim_bin="$data_dir/shim_$shim_board.bin"
+shim_zip="$data_dir/shim_$shim_board.zip"
+shim_dir="$data_dir/shim_${shim_board}_chunks"
 reco_bin="$data_dir/reco_$board.bin"
 reco_zip="$data_dir/reco_$board.zip"
 mkdir -p "$data_dir"
@@ -133,7 +142,7 @@ download_and_unzip() {
 download_shim() {
   print_info "downloading shim file manifest"
   local boards_index="$(curl --no-progress-meter "https://cdn.cros.download/boards.txt")"
-  local shim_url_path="$(echo "$boards_index" | grep "/$board/").manifest"
+  local shim_url_path="$(echo "$boards_index" | grep "/$shim_board/").manifest"
   local shim_url_dir="$(dirname "$shim_url_path")"
   local shim_manifest="$(curl --no-progress-meter "https://cdn.cros.download/$shim_url_path")"
   local py_load_json="import json, sys; manifest = json.load(sys.stdin)"
@@ -252,14 +261,14 @@ if [ "$compress_img" ]; then
 fi
 
 print_title "building final disk image"
-final_image="$data_dir/shimboot_$board.bin"
+final_image="$data_dir/shimboot_$image_tag.bin"
 rm -rf $final_image
 retry_cmd ./build.sh $final_image $shim_bin $rootfs_dir "quiet=$quiet" "name=$distro" "luks=$luks"
 print_info "build complete! the final disk image is located at $final_image"
 
 #a small image with only the boot partitions, to leave plugged in after installing to the emmc
 print_title "building boot-only disk image"
-boot_image="$data_dir/shimboot_${board}_boot.bin"
+boot_image="$data_dir/shimboot_${image_tag}_boot.bin"
 rm -rf $boot_image
 retry_cmd ./build.sh $boot_image $shim_bin $rootfs_dir "quiet=$quiet" "bootonly=1" "luks=$luks"
 print_info "the boot-only disk image is located at $boot_image"
@@ -272,10 +281,10 @@ if [ "$compress_img" ]; then
 fi
 
 if [ "$compress_img" ]; then
-  image_zip="$data_dir/shimboot_$board.zip"
+  image_zip="$data_dir/shimboot_$image_tag.zip"
   print_title "compressing disk image into a zip file"
   zip -j $image_zip $final_image
-  zip -j "$data_dir/shimboot_${board}_boot.zip" $boot_image
+  zip -j "$data_dir/shimboot_${image_tag}_boot.zip" $boot_image
   print_info "finished compressing the disk file"
   print_info "the finished zip file can be found at $image_zip" 
 fi

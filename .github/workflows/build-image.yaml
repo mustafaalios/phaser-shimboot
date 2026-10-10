@@ -16,7 +16,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [octopus]
+        include:
+          # the normal octopus image, and two experimental ones that use another board's shim kernel
+          - shim_board: octopus
+            tag: octopus
+          - shim_board: nissa
+            tag: octopus_nissa
+          - shim_board: dedede
+            tag: octopus_dedede
 
     runs-on: ubuntu-latest
     steps:
@@ -50,7 +57,7 @@ jobs:
       - name: run build
         run: |
           sudo apt-get update
-          sudo DEBUG=1 ./build_complete.sh compress_img=1 quiet=1
+          sudo DEBUG=1 ./build_complete.sh compress_img=1 quiet=1 shim_board=${{ matrix.shim_board }}
 
       - name: check kexec made it into the image
         run: |
@@ -66,10 +73,10 @@ jobs:
       - name: upload img
         uses: actions/upload-artifact@v4
         with:
-          name: shimboot_${{ matrix.board }}
+          name: shimboot_${{ matrix.tag }}
           path: |
-            data/shimboot_${{ matrix.board }}.bin
-            data/shimboot_${{ matrix.board }}_boot.bin
+            data/shimboot_${{ matrix.tag }}.bin
+            data/shimboot_${{ matrix.tag }}_boot.bin
           compression-level: 7
   
       - name: create release
@@ -78,8 +85,8 @@ jobs:
         with:
           draft: true
           files: |
-            data/shimboot_${{ matrix.board }}.zip
-            data/shimboot_${{ matrix.board }}_boot.zip
+            data/shimboot_${{ matrix.tag }}.zip
+            data/shimboot_${{ matrix.tag }}_boot.zip
 
   build-uefi:
     permissions:

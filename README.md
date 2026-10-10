@@ -49,6 +49,18 @@ The shim's kernel is Linux 4.14, and the firmware will only start that one from 
 - A rootfs only gets the new kernel if it has `/boot/vmlinuz-*` and `/boot/initrd.img-*`, so an eMMC installed from an older image keeps booting on 4.14 until you install a new image.
 - **Untested on hardware.** Please report what `uname -r` shows and what the bootloader prints.
 
+## Experimental: a newer shim kernel from another board
+The octopus RMA shim carries Linux 4.14.91 and no kexec, and it is signed, so it can't be changed. The firmware's recovery key is shared across most Chromebooks, so the shim of another board may boot on octopus. `shim_board=<board>` takes the signed launcher kernel (and the matching modules) from that board's shim, while the recovery image, firmware and rootfs still come from octopus.
+
+Kernel versions inside the shims (printed by the `probe-shim-kernels` workflow, `tools/probe_shim_kernels.py`): coral 4.4.96, grunt 4.14.75, octopus 4.14.91, hatch 4.19.84, puff 4.19.131, volteer 5.4.76, zork 5.4.85, dedede 5.4.85, brya 5.10.99, nissa 5.15.74.
+
+```bash
+sudo ./build_complete.sh shim_board=nissa     # data/shimboot_octopus_nissa.bin
+sudo ./build_complete.sh shim_board=dedede    # data/shimboot_octopus_dedede.bin
+```
+
+CI builds `shimboot_octopus_nissa` (5.15) and `shimboot_octopus_dedede` (5.4) next to the normal image. **Untested on hardware.** If the firmware refuses the donor kernel, or the kernel lacks a driver the 100e needs, the screen stays blank or it falls to the recovery screen, and the normal octopus image still works. `uname -r` in the booted system shows which kernel you got.
+
 ## Booting without the USB drive
 With stock firmware the USB cannot be avoided in recovery mode: the firmware only starts the Google-signed shim kernel from external media. The experimental internal boot (dev-key signed kernel on the eMMC, started with Ctrl+D) needs developer mode to accept it. On at least one enrolled Lenovo 100e Gen 2, Ctrl+D did nothing on either the 'OS verification is OFF' screen or the recovery screen, so the firmware is deciding this and software cannot override it without changing the firmware. Choosing `d` in the bootloader menu prints the firmware settings it can read (`crossystem` values, kexec support, disk layout) and saves them to `shimboot_diag.txt` on the boot drive, which narrows down why. Please attach that file to an issue.
 
