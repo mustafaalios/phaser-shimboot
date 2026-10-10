@@ -24,6 +24,11 @@ jobs:
             tag: octopus_nissa
           - shim_board: dedede
             tag: octopus_dedede
+          # shims from the same era as the octopus one (May 2021), in case newer shims use a newer signing key
+          - shim_board: volteer
+            tag: octopus_volteer
+          - shim_board: hatch
+            tag: octopus_hatch
 
     runs-on: ubuntu-latest
     steps:

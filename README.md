@@ -59,7 +59,9 @@ sudo ./build_complete.sh shim_board=nissa     # data/shimboot_octopus_nissa.bin
 sudo ./build_complete.sh shim_board=dedede    # data/shimboot_octopus_dedede.bin
 ```
 
-CI builds `shimboot_octopus_nissa` (5.15) and `shimboot_octopus_dedede` (5.4) next to the normal image. **Untested on hardware.** If the firmware refuses the donor kernel, or the kernel lacks a driver the 100e needs, the screen stays blank or it falls to the recovery screen, and the normal octopus image still works. `uname -r` in the booted system shows which kernel you got.
+CI builds `shimboot_octopus_nissa` (5.15), `shimboot_octopus_dedede` (5.4), `shimboot_octopus_volteer` (5.4, same era as the octopus shim) and `shimboot_octopus_hatch` (4.19) next to the normal image.
+
+**Result so far:** the nissa shim (December 2022) is not recognised by the octopus firmware. A signing key newer than the firmware knows is a likely cause, so shims from the same era as the octopus one (May 2021) are the better bet. **Untested on hardware.** If the firmware refuses the donor kernel, or the kernel lacks a driver the 100e needs, the screen stays blank or it falls to the recovery screen, and the normal octopus image still works. `uname -r` in the booted system shows which kernel you got.
 
 ## Booting without the USB drive
 With stock firmware the USB cannot be avoided in recovery mode: the firmware only starts the Google-signed shim kernel from external media. The experimental internal boot (dev-key signed kernel on the eMMC, started with Ctrl+D) needs developer mode to accept it. On at least one enrolled Lenovo 100e Gen 2, Ctrl+D did nothing on either the 'OS verification is OFF' screen or the recovery screen, so the firmware is deciding this and software cannot override it without changing the firmware. Choosing `d` in the bootloader menu prints the firmware settings it can read (`crossystem` values, kexec support, disk layout) and saves them to `shimboot_diag.txt` on the boot drive, which narrows down why. Please attach that file to an issue.
