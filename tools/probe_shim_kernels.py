@@ -59,46 +59,63 @@ def stream_shim(board, boards_index):
     raise RuntimeError("ran out of chunks before the kernel partition ended")
 
 
-def decompress(data, limit=160 * 1024 * 1024):
-    """Decompress a kernel payload, returns (name, bytes) or (name, None) when it can't be handled."""
-    try:
-        if data[:2] == b"\x1f\x8b":
-            return "gzip", zlib.decompressobj(31).decompress(data, limit)
-        if data[:6] == b"\xfd7zXZ\x00":
-            return "xz", lzma.LZMADecompressor(lzma.FORMAT_XZ).decompress(data, limit)
-        if data[:3] == b"\x5d\x00\x00":
-            return "lzma", lzma.LZMADecompressor(lzma.FORMAT_ALONE).decompress(data, limit)
-        if data[:3] == b"BZh":
-            return "bzip2", bz2.BZ2Decompressor().decompress(data, limit)
-    except Exception as error:
-        return "error: %s" % error, None
-    names = {b"\x02\x21\x4c\x18": "lz4", b"\x28\xb5\x2f\xfd": "zstd"}
-    return names.get(data[:4], "unknown %s" % data[:4].hex()), None
+def lz4_legacy(data, limit):
+    import lz4.block
+    out = bytearray()
+    i = 4
+    while i + 4 <= len(data) and len(out) < limit:
+        size = struct.unpack_from("<I", data, i)[0]
+        i += 4
+        if size == 0 or size > len(data) - i:
+            break
+        try:
+            out += lz4.block.decompress(data[i:i + size], uncompressed_size=8 << 20)
+        except Exception:
+            break
+        i += size
+    return bytes(out)
+
+
+def zstd_stream(data, limit):
+    import zstandard
+    return zstandard.ZstdDecompressor().decompressobj().decompress(data[:limit])
+
+
+# magic -> (name, function(data, limit) -> bytes)
+FORMATS = [
+    (rb"\x1f\x8b\x08", "gzip", lambda d, n: zlib.decompressobj(31).decompress(d, n)),
+    (rb"\xfd7zXZ\x00", "xz", lambda d, n: lzma.LZMADecompressor(lzma.FORMAT_XZ).decompress(d, n)),
+    (rb"\x5d\x00\x00[\x00-\xff]{2}[\x00-\xff]{8}", "lzma", lambda d, n: lzma.LZMADecompressor(lzma.FORMAT_ALONE).decompress(d, n)),
+    (rb"BZh[1-9]1AY&SY", "bzip2", lambda d, n: bz2.BZ2Decompressor().decompress(d, n)),
+    (rb"\x02\x21\x4c\x18", "lz4", lz4_legacy),
+    (rb"\x28\xb5\x2f\xfd", "zstd", zstd_stream),
+]
 
 
 def kernel_version(partition):
-    """Find every bzImage in the partition, decompress its payload and read the 'Linux version' string."""
+    """The signed kernel blob holds the compressed kernel near its start. Try every compressed stream we can find
+    and read the 'Linux version' string out of whichever one decompresses to a kernel."""
+    limit = 160 * 1024 * 1024
     notes = []
-    pos = -1
-    while True:
-        pos = partition.find(b"HdrS", pos + 1)
-        if pos < 0:
-            break
-        start = pos - 0x202
-        if start < 0:
-            continue
-        setup_sects = partition[start + 0x1F1] or 4
-        payload_offset, payload_length = struct.unpack_from("<II", partition, start + 0x248)
-        payload = start + (setup_sects + 1) * 512 + payload_offset
-        method, data = decompress(partition[payload:payload + payload_length])
-        if data:
-            match = re.search(rb"Linux version [ -~]+", data)
-            if match:
-                return match.group(0).decode()
-            notes.append("%s payload at %#x has no version string" % (method, payload))
-        else:
-            notes.append("payload at %#x: %s" % (payload, method))
-    return "no version found [%s; first bytes %s]" % ("; ".join(notes) or "no HdrS", partition[:16].hex())
+    for magic, name, function in FORMATS:
+        tried = 0
+        for match in re.finditer(magic, partition, re.S):
+            tried += 1
+            if tried > 200:
+                break
+            try:
+                data = function(partition[match.start():match.start() + 96 * 1024 * 1024], limit)
+            except ImportError as error:
+                notes.append("%s: missing python module (%s)" % (name, error))
+                break
+            except Exception:
+                continue
+            found = re.search(rb"Linux version [ -~]+", data or b"")
+            if found:
+                return "%s  [%s at %#x]" % (found.group(0).decode(), name, match.start())
+        if tried:
+            notes.append("%s: %d candidates, none was a kernel" % (name, tried))
+    return "no version found [%s]" % "; ".join(notes)
 
 
 def main():
