@@ -24,6 +24,10 @@ if [ ! -f .config ]; then
   case "$vermagic" in *modversions*) scripts/config -e MODVERSIONS ;; *) scripts/config -d MODVERSIONS ;; esac
   case "$vermagic" in *preempt*) scripts/config -e PREEMPT ;; esac
   scripts/config -d MODULE_SIG -d DEBUG_INFO -d STACK_VALIDATION -d UNWINDER_ORC -e UNWINDER_FRAME_POINTER
+  #these only matter for a full kernel build and break host tools on a modern builder; our module
+  #needs none of them and touches no struct whose layout they change, so drop them for the module build
+  scripts/config -d SECURITY_SELINUX -d SECURITY_SELINUX_BOOTPARAM -d SECURITY_SELINUX_DEVELOP
+  scripts/config -d GCC_PLUGINS -d GCC_PLUGIN_RANDSTRUCT -d GCC_PLUGIN_STRUCTLEAK -d GCC_PLUGIN_LATENT_ENTROPY
   make olddefconfig
 fi
 make -j"$jobs" modules_prepare

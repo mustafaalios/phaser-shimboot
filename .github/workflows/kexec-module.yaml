@@ -44,17 +44,24 @@ jobs:
       - name: build the modules (gcc 8, close to the shim's era)
         run: |
           docker run --rm -v "$PWD:/w" -w /w ubuntu:20.04 bash -c '
+            set -e
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq && apt-get install -y -qq gcc-8 make bc bison flex libelf-dev libssl-dev kmod python3 >/dev/null
             ln -sf /usr/bin/gcc-8 /usr/local/bin/gcc
+            echo "::group::prepare + smoke module (validates toolchain and vermagic)"
             tools/build_shim_kmod.sh ksrc kexec_mod/smoke inspect
+            echo "::endgroup::"
+            echo "::group::kexec module"
+            make -C ksrc M=/w/kexec_mod/src modules
+            modinfo -F vermagic kexec_mod/src/shimboot_kexec.ko
+            echo "::endgroup::"
           '
 
       - name: upload
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kexec_mod
           path: |
             kexec_mod/**/*.ko
             inspect/modules.vermagic
-            inspect/Module.symvers.shim
