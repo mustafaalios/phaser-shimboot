@@ -1,0 +1,59 @@
+name: kexec-module
+run-name: Build the kexec module for the octopus shim kernel
+on:
+  push:
+    paths:
+      - kexec_mod/**
+      - tools/fetch_shim.sh
+      - tools/inspect_shim_kernel.sh
+      - tools/build_shim_kmod.sh
+      - .github/workflows/kexec-module.yaml
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install tools
+        run: sudo apt-get update && sudo apt-get install -y python3-lz4 python3-zstandard kmod unzip
+
+      - name: download the octopus shim
+        run: tools/fetch_shim.sh octopus shim.bin
+
+      - name: inspect the shim kernel and its modules
+        run: sudo tools/inspect_shim_kernel.sh shim.bin inspect && sudo chown -R "$USER" inspect
+
+      - name: fetch the chromeos kernel source at the shim's commit
+        run: |
+          sha="$(grep -aoE 'Linux version [^ ]+' inspect/vmlinux | head -n1 | grep -oE 'g[0-9a-f]+$' | cut -c2-)"
+          echo "shim commit: $sha"
+          git init -q ksrc
+          cd ksrc
+          git remote add origin https://chromium.googlesource.com/chromiumos/third_party/kernel
+          git ls-remote origin | grep -E 'chromeos-4\.14' | grep -iE 'octopus|factory|release-R9' | head -n 20 || true
+          #trees and blobs come on checkout, so fetching every 4.14 branch's history stays small
+          git fetch -q --filter=tree:0 --no-tags origin 'refs/heads/*chromeos-4.14*:refs/remotes/origin/*'
+          full="$(git rev-parse --verify "$sha^{commit}")"
+          echo "full commit: $full"
+          git branch -r --contains "$full" | head -n 5
+          git -c advice.detachedHead=false checkout -q "$full"
+
+      - name: build the modules (gcc 8, close to the shim's era)
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w ubuntu:20.04 bash -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq && apt-get install -y -qq gcc-8 make bc bison flex libelf-dev libssl-dev kmod python3 >/dev/null
+            ln -sf /usr/bin/gcc-8 /usr/local/bin/gcc
+            tools/build_shim_kmod.sh ksrc kexec_mod/smoke inspect
+          '
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: kexec_mod
+          path: |
+            kexec_mod/**/*.ko
+            inspect/modules.vermagic
+            inspect/Module.symvers.shim

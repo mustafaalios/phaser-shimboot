@@ -168,6 +168,16 @@ def report_config(config):
 
 
 def main():
+    if sys.argv[1:2] == ["--vmlinux"]:
+        #decompress a local kernel partition dump: probe_shim_kernels.py --vmlinux KERN-A.bin vmlinux.out
+        with open(sys.argv[2], "rb") as f:
+            data, note = decompress_kernel(f.read())
+        if not data:
+            sys.exit(note)
+        with open(sys.argv[3], "wb") as f:
+            f.write(data)
+        print(kernel_version(data, note))
+        return
     want_config = "--config" in sys.argv[1:]
     boards = [a for a in sys.argv[1:] if a != "--config"]
     boards_index = fetch(BASE + "boards.txt").decode().split()
