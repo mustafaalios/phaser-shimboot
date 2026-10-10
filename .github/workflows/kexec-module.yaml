@@ -27,18 +27,19 @@ jobs:
 
       - name: fetch the chromeos kernel source at the shim's commit
         run: |
+          repo="https://chromium.googlesource.com/chromiumos/third_party/kernel"
           sha="$(grep -aoE 'Linux version [^ ]+' inspect/vmlinux | head -n1 | grep -oE 'g[0-9a-f]+$' | cut -c2-)"
-          echo "shim commit: $sha"
+          echo "shim commit (abbrev): $sha"
+          #gitiles expands the abbreviated commit to a full sha (its JSON body is prefixed with a )]}' line)
+          full="$(curl -sSf "$repo/+/$sha?format=JSON" | tail -n +2 | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["commit"])')"
+          echo "shim commit (full): $full"
           git init -q ksrc
           cd ksrc
-          git remote add origin https://chromium.googlesource.com/chromiumos/third_party/kernel
-          git ls-remote origin | grep -E 'chromeos-4\.14' | grep -iE 'octopus|factory|release-R9' | head -n 20 || true
-          #trees and blobs come on checkout, so fetching every 4.14 branch's history stays small
-          git fetch -q --filter=tree:0 --no-tags origin 'refs/heads/*chromeos-4.14*:refs/remotes/origin/*'
-          full="$(git rev-parse --verify "$sha^{commit}")"
-          echo "full commit: $full"
-          git branch -r --contains "$full" | head -n 5
-          git -c advice.detachedHead=false checkout -q "$full"
+          git remote add origin "$repo"
+          #chromium googlesource allows fetching a commit by sha, so grab just that one commit's tree
+          git fetch -q --depth 1 origin "$full"
+          git -c advice.detachedHead=false checkout -q FETCH_HEAD
+          echo "checked out $(git rev-parse HEAD)"
 
       - name: build the modules (gcc 8, close to the shim's era)
         run: |
