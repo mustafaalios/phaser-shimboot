@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Print the Linux version inside the signed kernel (KERN-A) of RMA shims, without downloading whole images.
 
-Usage: probe_shim_kernels.py board [board ...]
+Usage: probe_shim_kernels.py [--config] board [board ...]
 Streams only the first chunks of each shim from cdn.cros.download, decompresses the zip on the fly,
 reads the GPT, and pulls the version string out of the kernel's bzImage setup header.
+With --config, also decompresses the kernel's embedded .config (CONFIG_IKCONFIG) and prints the
+flags that decide whether a self-built out-of-tree kexec module could load and run on that shim
+(module signing enforcement, LoadPin, MODVERSIONS, kallsyms, kexec).
 """
 import bz2
 import json
@@ -92,9 +95,9 @@ FORMATS = [
 ]
 
 
-def kernel_version(partition):
+def decompress_kernel(partition):
     """The signed kernel blob holds the compressed kernel near its start. Try every compressed stream we can find
-    and read the 'Linux version' string out of whichever one decompresses to a kernel."""
+    and return the bytes of whichever one decompresses to a kernel (it contains the 'Linux version' string)."""
     limit = 160 * 1024 * 1024
     notes = []
     for magic, name, function in FORMATS:
@@ -110,19 +113,70 @@ def kernel_version(partition):
                 break
             except Exception:
                 continue
-            found = re.search(rb"Linux version [ -~]+", data or b"")
-            if found:
-                return "%s  [%s at %#x]" % (found.group(0).decode(), name, match.start())
+            if re.search(rb"Linux version [ -~]+", data or b""):
+                return data, "%s at %#x" % (name, match.start())
         if tried:
             notes.append("%s: %d candidates, none was a kernel" % (name, tried))
-    return "no version found [%s]" % "; ".join(notes)
+    return None, "no kernel found [%s]" % "; ".join(notes)
+
+
+def kernel_version(data, note):
+    found = re.search(rb"Linux version [ -~]+", data or b"")
+    return "%s  [%s]" % (found.group(0).decode(), note) if found else "no version found [%s]" % note
+
+
+#config options worth reporting: the ones that decide whether a self-built kexec module can load and run.
+CONFIG_KEYS = [
+    "MODULE_SIG", "MODULE_SIG_FORCE", "MODULE_SIG_ALL", "MODVERSIONS",
+    "SECURITY_LOADPIN", "MODULE_SIG_KEY",
+    "KALLSYMS", "KALLSYMS_ALL", "KEXEC", "KEXEC_CORE", "KEXEC_FILE",
+    "RELOCATABLE", "RANDOMIZE_BASE", "STRICT_KERNEL_RWX", "STRICT_MODULE_RWX",
+    "LOCALVERSION", "DEBUG_INFO",
+]
+
+
+def extract_config(data):
+    """ChromeOS kernels embed their .config (CONFIG_IKCONFIG). It sits gzip-compressed in the decompressed
+    kernel image between the markers 'IKCFG_ST' and 'IKCFG_ED'. Return the config text, or None if absent."""
+    if not data:
+        return None
+    start = data.find(b"IKCFG_ST")
+    if start < 0:
+        return None
+    start += len(b"IKCFG_ST")
+    try:
+        return zlib.decompressobj(31).decompress(data[start:start + 8 * 1024 * 1024]).decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def report_config(config):
+    if config is None:
+        return "    config: not embedded (CONFIG_IKCONFIG off), cannot read flags offline"
+    values = {}
+    for line in config.splitlines():
+        line = line.strip()
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key[len("CONFIG_"):]] = value
+        elif line.startswith("# CONFIG_") and line.endswith(" is not set"):
+            values[line[len("# CONFIG_"):-len(" is not set")]] = "n"
+    lines = []
+    for key in CONFIG_KEYS:
+        lines.append("    CONFIG_%-20s %s" % (key, values.get(key, "(absent)")))
+    return "\n".join(lines)
 
 
 def main():
+    want_config = "--config" in sys.argv[1:]
+    boards = [a for a in sys.argv[1:] if a != "--config"]
     boards_index = fetch(BASE + "boards.txt").decode().split()
-    for board in sys.argv[1:]:
+    for board in boards:
         try:
-            print("%-10s %s" % (board, kernel_version(stream_shim(board, boards_index))), flush=True)
+            data, note = decompress_kernel(stream_shim(board, boards_index))
+            print("%-10s %s" % (board, kernel_version(data, note)), flush=True)
+            if want_config:
+                print(report_config(extract_config(data)), flush=True)
         except Exception as error:
             print("%-10s ERROR: %s" % (board, error), flush=True)
 
