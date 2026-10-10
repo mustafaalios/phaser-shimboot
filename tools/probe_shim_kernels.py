@@ -5,7 +5,9 @@ Usage: probe_shim_kernels.py board [board ...]
 Streams only the first chunks of each shim from cdn.cros.download, decompresses the zip on the fly,
 reads the GPT, and pulls the version string out of the kernel's bzImage setup header.
 """
+import bz2
 import json
+import lzma
 import re
 import struct
 import sys
@@ -57,22 +59,46 @@ def stream_shim(board, boards_index):
     raise RuntimeError("ran out of chunks before the kernel partition ended")
 
 
+def decompress(data, limit=160 * 1024 * 1024):
+    """Decompress a kernel payload, returns (name, bytes) or (name, None) when it can't be handled."""
+    try:
+        if data[:2] == b"\x1f\x8b":
+            return "gzip", zlib.decompressobj(31).decompress(data, limit)
+        if data[:6] == b"\xfd7zXZ\x00":
+            return "xz", lzma.LZMADecompressor(lzma.FORMAT_XZ).decompress(data, limit)
+        if data[:3] == b"\x5d\x00\x00":
+            return "lzma", lzma.LZMADecompressor(lzma.FORMAT_ALONE).decompress(data, limit)
+        if data[:3] == b"BZh":
+            return "bzip2", bz2.BZ2Decompressor().decompress(data, limit)
+    except Exception as error:
+        return "error: %s" % error, None
+    names = {b"\x02\x21\x4c\x18": "lz4", b"\x28\xb5\x2f\xfd": "zstd"}
+    return names.get(data[:4], "unknown %s" % data[:4].hex()), None
+
+
 def kernel_version(partition):
-    pos = partition.find(b"HdrS")
-    if pos < 0x202:
-        return "no x86 bzImage found (arm board?)"
-    start = pos - 0x202
-    offset = struct.unpack_from("<H", partition, start + 0x20E)[0]
-    where = start + offset + 0x200
-    end = partition.find(b"\0", where)
-    text = partition[where:end].decode(errors="replace") if end > where else ""
-    if text:
-        return text
-    #the pointer didn't lead to a string, look for a version number in the setup code instead
-    area = partition[start:start + 0x8000]
-    match = re.search(rb"\d+\.\d+\.\d+[ -~]{0,100}", area)
-    debug = "HdrS@%#x ptr=%#x bytes=%s" % (pos, offset, partition[where:where + 24].hex())
-    return (match.group(0).decode() if match else "no version string found") + "   [" + debug + "]"
+    """Find every bzImage in the partition, decompress its payload and read the 'Linux version' string."""
+    notes = []
+    pos = -1
+    while True:
+        pos = partition.find(b"HdrS", pos + 1)
+        if pos < 0:
+            break
+        start = pos - 0x202
+        if start < 0:
+            continue
+        setup_sects = partition[start + 0x1F1] or 4
+        payload_offset, payload_length = struct.unpack_from("<II", partition, start + 0x248)
+        payload = start + (setup_sects + 1) * 512 + payload_offset
+        method, data = decompress(partition[payload:payload + payload_length])
+        if data:
+            match = re.search(rb"Linux version [ -~]+", data)
+            if match:
+                return match.group(0).decode()
+            notes.append("%s payload at %#x has no version string" % (method, payload))
+        else:
+            notes.append("payload at %#x: %s" % (payload, method))
+    return "no version found [%s; first bytes %s]" % ("; ".join(notes) or "no HdrS", partition[:16].hex())
 
 
 def main():
