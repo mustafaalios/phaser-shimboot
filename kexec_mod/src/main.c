@@ -132,8 +132,8 @@ struct kimage {
 #define boot_phys_to_virt(addr)	phys_to_virt(addr)
 
 /* ---- the relocate trampoline (relocate_kernel_64.S) ---- */
-extern const unsigned char relocate_kernel[];
 extern unsigned long kexec_control_code_size;
+/* defined in asm; used both as a callable and (decayed) as the address to copy/map */
 unsigned long relocate_kernel(unsigned long indirection_page,
 			      unsigned long page_list,
 			      unsigned long start_address,
@@ -150,7 +150,7 @@ static void (*p_ftrace_enabled_restore)(int);
 static void (*p_hw_breakpoint_disable)(void);
 static unsigned long *p_totalram_pages;
 static unsigned long *p_max_pfn;
-static unsigned long **p_sys_call_table;
+static unsigned long *p_sys_call_table;
 
 static unsigned long totalram(void)
 {

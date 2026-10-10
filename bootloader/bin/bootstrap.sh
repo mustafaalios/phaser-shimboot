@@ -479,8 +479,18 @@ try_kexec() {
     kexec_skip "no kexec binary in the bootloader"
     return 1
   fi
-  if [ ! -e /sys/kernel/kexec_loaded ]; then
-    kexec_skip "the shim kernel was built without kexec support"
+  #the octopus shim kernel has no built-in kexec. If a matching kexec module is shipped, load it:
+  #it adds the kexec_load syscall and the reboot(LINUX_REBOOT_CMD_KEXEC) path at runtime.
+  if [ ! -e /sys/kernel/kexec_loaded ] && ! grep -q '^shimboot_kexec ' /proc/modules; then
+    for ko in /opt/shimboot_kexec.ko "$mnt"/opt/shimboot_kexec.ko; do
+      [ -f "$ko" ] || continue
+      echo "kexec: loading the kexec module ($ko)"
+      insmod "$ko" 2>&1 && break
+    done
+  fi
+  #either built-in kexec (sysfs file) or our module being loaded means kexec_load will work
+  if [ ! -e /sys/kernel/kexec_loaded ] && ! grep -q '^shimboot_kexec ' /proc/modules; then
+    kexec_skip "no kexec support (the shim kernel lacks it and no kexec module loaded)"
     return 1
   fi
 
