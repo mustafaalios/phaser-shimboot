@@ -6,6 +6,7 @@ Streams only the first chunks of each shim from cdn.cros.download, decompresses 
 reads the GPT, and pulls the version string out of the kernel's bzImage setup header.
 """
 import json
+import re
 import struct
 import sys
 import urllib.request
@@ -62,8 +63,16 @@ def kernel_version(partition):
         return "no x86 bzImage found (arm board?)"
     start = pos - 0x202
     offset = struct.unpack_from("<H", partition, start + 0x20E)[0]
-    end = partition.index(b"\0", start + offset + 0x200)
-    return partition[start + offset + 0x200:end].decode(errors="replace")
+    where = start + offset + 0x200
+    end = partition.find(b"\0", where)
+    text = partition[where:end].decode(errors="replace") if end > where else ""
+    if text:
+        return text
+    #the pointer didn't lead to a string, look for a version number in the setup code instead
+    area = partition[start:start + 0x8000]
+    match = re.search(rb"\d+\.\d+\.\d+[ -~]{0,100}", area)
+    debug = "HdrS@%#x ptr=%#x bytes=%s" % (pos, offset, partition[where:where + 24].hex())
+    return (match.group(0).decode() if match else "no version string found") + "   [" + debug + "]"
 
 
 def main():
