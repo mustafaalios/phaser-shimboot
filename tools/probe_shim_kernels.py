@@ -15,7 +15,9 @@ BASE = "https://cdn.cros.download/"
 
 
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=120) as response:
+    #the cdn rejects python's default user agent, curl and wget are fine
+    request = urllib.request.Request(url, headers={"User-Agent": "curl/8.5.0"})
+    with urllib.request.urlopen(request, timeout=120) as response:
         return response.read()
 
 
