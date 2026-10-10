@@ -57,11 +57,31 @@ jobs:
             echo "::endgroup::"
           '
 
+      - name: stage the module under its vermagic name
+        if: always()
+        run: |
+          mkdir -p out
+          if [ -f kexec_mod/src/shimboot_kexec.ko ]; then
+            cp kexec_mod/src/shimboot_kexec.ko out/shimboot_kexec.ko
+            cp kexec_mod/smoke/hello.ko out/shimboot_kexec_smoke.ko 2>/dev/null || true
+            cp inspect/modules.vermagic out/vermagic.txt
+          fi
+
       - name: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kexec_mod
           path: |
-            kexec_mod/**/*.ko
-            inspect/modules.vermagic
+            out/shimboot_kexec.ko
+            out/shimboot_kexec_smoke.ko
+            out/vermagic.txt
+
+      - name: create release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: |
+            out/shimboot_kexec.ko
+            out/shimboot_kexec_smoke.ko

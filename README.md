@@ -45,7 +45,12 @@ If the system fails to boot, type `rescue <number>` at the bootloader prompt to 
 ## Newer kernel (kexec)
 The shim's kernel is Linux 4.14, and the firmware will only start that one from external media. Builds now also install the distro's own kernel in the rootfs (`distro_kernel=true`, the default on Debian; the default release is `trixie`, which ships Linux 6.12 LTS). When you boot a rootfs, the bootloader loads that kernel with a static `kexec` and jumps into it, so `uname -r` shows the new version. The shim kernel is then only the launcher.
 
-- It falls back to booting on the shim's own kernel if the shim kernel was built without `CONFIG_KEXEC` (check with `ls /sys/kernel/kexec_loaded` in the bootloader shell), if `kexec` fails, if the rootfs is LUKS-encrypted, or in `rescue` mode. Set `USE_KEXEC="no"` in `bootloader/opt/shimboot.conf` to turn it off.
+- The octopus shim kernel was built **without** kexec support, so on a stock octopus shim this path needs the kexec module below. It still falls back to the shim's own kernel if `kexec` fails, if the rootfs is LUKS-encrypted, or in `rescue` mode. Set `USE_KEXEC="no"` in `bootloader/opt/shimboot.conf` to turn it off.
+
+### Adding kexec to the octopus shim kernel (a loadable module)
+Because the octopus shim's 4.14 kernel has no built-in kexec and can't be rebuilt, `kexec_mod/` builds a **loadable module that adds the `kexec_load` syscall back at runtime**. The shim kernel does not enforce module signatures and still exports `kallsyms_lookup_name`, so a module built against the matching chromeos-4.14 source loads and bridges the stock `kexec` tool to a trimmed in-tree kexec core. If `bootloader/opt/shimboot_kexec.ko` is present, the bootloader loads it before the kexec step; with no module present, behaviour is unchanged.
+
+Build it with the `kexec-module` CI workflow (it uploads `shimboot_kexec.ko` and a `shimboot_kexec_smoke.ko` pre-flight module), drop the `.ko` into `bootloader/opt/`, and rebuild. See `kexec_mod/README.md` for how it works, the install/test steps, and the risks. **Builds and loads; the kexec jump is untested on hardware.**
 - A rootfs only gets the new kernel if it has `/boot/vmlinuz-*` and `/boot/initrd.img-*`, so an eMMC installed from an older image keeps booting on 4.14 until you install a new image.
 - **Untested on hardware.** Please report what `uname -r` shows and what the bootloader prints.
 
