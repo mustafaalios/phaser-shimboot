@@ -41,6 +41,20 @@ jobs:
           git -c advice.detachedHead=false checkout -q FETCH_HEAD
           echo "checked out $(git rev-parse HEAD)"
 
+      - name: does the shim's i915 source have what Mesa needs
+        run: |
+          cd ksrc
+          echo "== i915 uapi + getparam in the shim's kernel source (Mesa 25 needs the first row on both iris and anv)"
+          for p in HAS_CONTEXT_ISOLATION HAS_EXEC_FENCE_ARRAY HAS_EXEC_SOFTPIN HAS_EXEC_ASYNC HAS_EXEC_CAPTURE HAS_EXEC_BATCH_FIRST HAS_EXEC_TIMELINE_FENCES; do
+            u=$(grep -c "I915_PARAM_$p\b" include/uapi/drm/i915_drm.h || true)
+            g=$(grep -c "case I915_PARAM_$p\b" drivers/gpu/drm/i915/i915_drv.c || true)
+            printf '  %-26s uapi=%s getparam=%s\n' "$p" "$u" "$g"
+          done
+          echo "== golden-state / isolation in drivers/gpu/drm/i915"
+          grep -rn "intel_engines_has_context_isolation\|default_state" drivers/gpu/drm/i915 | head -n 12 || echo "  (none)"
+          echo "== loadpin in this tree"
+          grep -n "SECURITY_LOADPIN" security/loadpin/Kconfig | head -n 3 || true
+
       - name: build the modules (gcc 8, close to the shim's era)
         run: |
           docker run --rm -v "$PWD:/w" -w /w ubuntu:20.04 bash -c '

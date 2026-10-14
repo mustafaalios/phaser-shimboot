@@ -69,6 +69,27 @@ if [ -s "$out/symvers.raw" ]; then
     grep -P "\t$s\$" "$out/Module.symvers.shim" | sed 's/^/    /' || echo "    (no crc seen for $s)"
   done
 fi
+echo "== graphics: is the shim's i915 a module, and does it have what Mesa needs"
+modname() { basename "$1" | sed -E 's/\.ko(\.gz)?$//'; }
+unpack() { case "$1" in *.gz) zcat "$1" > "$2" ;; *) cp "$1" "$2" ;; esac; }
+echo "  drm / i915 / intel / video modules shipped:"
+find "$kdir" \( -name '*.ko' -o -name '*.ko.gz' \) | grep -E '/gpu/|/video/|/char/agp/|drm|i915|intel_gtt' | sed "s|$kdir||; s|^|    |" | sort
+echo "  built into the kernel (modules.builtin) matching drm/i915/agp/fb:"
+grep -E 'drm|i915|agp|fb_|video' "$kdir/modules.builtin" 2>/dev/null | sed 's/^/    /' | head -n 30 || true
+i915ko="$(find "$kdir" \( -name 'i915.ko' -o -name 'i915.ko.gz' \) | head -n1)"
+if [ "$i915ko" ]; then
+  unpack "$i915ko" "$out/i915.ko"
+  echo "  i915.ko: $(ls -l "$out/i915.ko" | awk '{print $5}') bytes"
+  echo "  i915 depends on modules: $(modinfo -F depends "$out/i915.ko")"
+  echo "  i915 retpoline/vermagic: $(modinfo -F vermagic "$out/i915.ko")"
+  echo "  i915 parameters: $(modinfo -F parm "$out/i915.ko" | cut -d: -f1 | tr '\n' ' ')"
+  echo "  context-isolation / golden-state symbols in the shim's i915.ko:"
+  (nm "$out/i915.ko" 2>/dev/null || true) | grep -iE 'context_isolation|default_state|intel_engines_has' | sed 's/^/    /'
+  strings -a "$out/i915.ko" | grep -iE 'context_isolation|default_state|golden' | sort -u | head -n 10 | sed 's/^/    string: /'
+else
+  echo "  NO i915 module found, so it is built into the kernel image"
+fi
+echo "  drm symbols i915 imports that are exported by the kernel (count): $(nm -u "$out/i915.ko" 2>/dev/null | grep -c ' U drm_' || true)"
 echo "  loadpin / module settings in the shim's kernel cmdline config:"
 grep -rhoE "(loadpin|module)\.[a-z_]+=[a-z0-9]+" "$mnt/etc" 2>/dev/null | sort -u | sed 's/^/    /' || true
 rm -rf "$tmpko"
