@@ -1,0 +1,28 @@
+name: probe-distros
+run-name: Which distro releases ship a Mesa that starts on the octopus 4.14 kernel
+on:
+  push:
+    paths:
+      - .github/workflows/probe-distros.yaml
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:bullseye", "debian:bookworm", "debian:trixie", "ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - name: package versions in ${{ matrix.image }}
+        run: |
+          docker run --rm ${{ matrix.image }} bash -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq >/dev/null 2>&1
+            echo "== ${{ matrix.image }}"
+            for p in mesa-vulkan-drivers libgl1-mesa-dri libgl1-amber-dri libglx-amber0 libegl-amber0 systemd libc6; do
+              printf "  %-22s %s\n" "$p" "$(apt-cache policy $p | sed -n "s/^  Candidate: //p")"
+            done
+            echo "  amber-ish packages:"
+            apt-cache search amber | grep -iE "^lib(gl|glx|egl|gles|gbm).*amber|mesa-amber" | sed "s/^/    /" || true
+          '
