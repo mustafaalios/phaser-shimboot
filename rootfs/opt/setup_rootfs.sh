@@ -66,6 +66,13 @@ if [ ! "$disable_base_pkgs" ]; then
   echo "ALGO=lzo" >> /etc/default/zramswap
   echo "PERCENT=100" >> /etc/default/zramswap
 
+  #graphics for the octopus shim kernel (4.14). Mesa's iris needs a 4.16+ kernel, so install the classic
+  #i965 stack (mesa-amber, from the shimboot repo) for OpenGL, plus the Vulkan driver and diagnostics.
+  #/etc/X11/Xsession.d/55shimboot-gpu selects amber only while the running kernel is older than 4.16.
+  #Vulkan (anv) only starts on a kernel without context isolation up to Mesa 23.0, so this wants bookworm.
+  apt-get install -y mesa-vulkan-drivers vulkan-tools mesa-utils || echo "warning: could not install the vulkan and mesa diagnostic packages"
+  apt-get install -y libgl1-amber-dri libglx-amber0 libegl-amber0 || echo "warning: mesa-amber is not available for ${release_name}, opengl falls back to software rendering on the 4.14 kernel"
+
   #update apt-file cache
   if which apt-file >/dev/null; then
     apt-file update

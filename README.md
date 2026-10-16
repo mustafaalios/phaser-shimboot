@@ -48,25 +48,16 @@ The shim's kernel is Linux 4.14, and the firmware will only start that one from 
 - The octopus shim kernel was built **without** kexec support, so on a stock octopus shim this path needs the kexec module below. It still falls back to the shim's own kernel if `kexec` fails, if the rootfs is LUKS-encrypted, or in `rescue` mode. Set `USE_KEXEC="no"` in `bootloader/opt/shimboot.conf` to turn it off.
 
 ### Adding kexec to the octopus shim kernel (a loadable module)
-Because the octopus shim's 4.14 kernel has no built-in kexec and can't be rebuilt, `kexec_mod/` builds a **loadable module that adds the `kexec_load` syscall back at runtime**. The shim kernel does not enforce module signatures and still exports `kallsyms_lookup_name`, so a module built against the matching chromeos-4.14 source loads and bridges the stock `kexec` tool to a trimmed in-tree kexec core. If `bootloader/opt/shimboot_kexec.ko` is present, the bootloader loads it before the kexec step; with no module present, behaviour is unchanged.
+Because the octopus shim's 4.14 kernel has no built-in kexec and can't be rebuilt, `kexec_mod/` builds a **loadable module that adds the `kexec_load` syscall back at runtime**. The shim kernel does not enforce module signatures and still exports `kallsyms_lookup_name`, so a module built against the matching chromeos-4.14 source loads and bridges the stock `kexec` tool to a trimmed in-tree kexec core. The bootloader only loads `bootloader/opt/shimboot_kexec.ko` if you set `USE_KEXEC_MODULE="yes"` in `shimboot.conf`; it is off by default because it did not work on hardware and, with the kernel's LoadPin, loading a module from the bootloader can make later module and firmware loads from the real rootfs fail.
 
-Build it with the `kexec-module` CI workflow (it uploads `shimboot_kexec.ko` and a `shimboot_kexec_smoke.ko` pre-flight module), drop the `.ko` into `bootloader/opt/`, and rebuild. See `kexec_mod/README.md` for how it works, the install/test steps, and the risks. **Builds and loads; the kexec jump is untested on hardware.**
+Build it with the `kexec-module` CI workflow (it uploads `shimboot_kexec.ko` and a `shimboot_kexec_smoke.ko` pre-flight module), drop the `.ko` into `bootloader/opt/`, and rebuild. See `kexec_mod/README.md` for how it works, the install/test steps, and the risks. **Reported not working on hardware.**
 - A rootfs only gets the new kernel if it has `/boot/vmlinuz-*` and `/boot/initrd.img-*`, so an eMMC installed from an older image keeps booting on 4.14 until you install a new image.
-- **Untested on hardware.** Please report what `uname -r` shows and what the bootloader prints.
+- **Not working on octopus.** The octopus shim kernel is built without kexec, and the loadable-module workaround below did not work on hardware, so on this device `uname -r` stays at 4.14.91. Treat this section as a dead end unless a kernel with kexec turns up.
 
-## Experimental: a newer shim kernel from another board
-The octopus RMA shim carries Linux 4.14.91 and no kexec, and it is signed, so it can't be changed. The firmware's recovery key is shared across most Chromebooks, so the shim of another board may boot on octopus. `shim_board=<board>` takes the signed launcher kernel (and the matching modules) from that board's shim, while the recovery image, firmware and rootfs still come from octopus.
+## Newer shim kernel from another board: does not boot
+`shim_board=<board>` takes the signed launcher kernel from another board's RMA shim. Tested on a Lenovo 100e Gen 2: **only the octopus shim boots**. The firmware rejects shims from other boards (nissa, dedede and the same-era volteer and hatch included), most likely because they are signed with a different recovery key. The option is still in `build_complete.sh` but CI no longer builds those images.
 
-Kernel versions inside the shims (printed by the `probe-shim-kernels` workflow, `tools/probe_shim_kernels.py`): coral 4.4.96, grunt 4.14.75, octopus 4.14.91, hatch 4.19.84, puff 4.19.131, volteer 5.4.76, zork 5.4.85, dedede 5.4.85, brya 5.10.99, nissa 5.15.74.
-
-```bash
-sudo ./build_complete.sh shim_board=nissa     # data/shimboot_octopus_nissa.bin
-sudo ./build_complete.sh shim_board=dedede    # data/shimboot_octopus_dedede.bin
-```
-
-CI builds `shimboot_octopus_nissa` (5.15), `shimboot_octopus_dedede` (5.4), `shimboot_octopus_volteer` (5.4, same era as the octopus shim) and `shimboot_octopus_hatch` (4.19) next to the normal image.
-
-**Result so far:** the nissa shim (December 2022) is not recognised by the octopus firmware. A signing key newer than the firmware knows is a likely cause, so shims from the same era as the octopus one (May 2021) are the better bet. **Untested on hardware.** If the firmware refuses the donor kernel, or the kernel lacks a driver the 100e needs, the screen stays blank or it falls to the recovery screen, and the normal octopus image still works. `uname -r` in the booted system shows which kernel you got.
+Kernel versions inside the shims, for reference (`probe-shim-kernels` workflow, `tools/probe_shim_kernels.py`): coral 4.4.96, grunt 4.14.75, octopus 4.14.91, hatch 4.19.84, puff 4.19.131, volteer 5.4.76, zork 5.4.85, dedede 5.4.85, brya 5.10.99, nissa 5.15.74.
 
 ## Booting without the USB drive
 With stock firmware the USB cannot be avoided in recovery mode: the firmware only starts the Google-signed shim kernel from external media. The experimental internal boot (dev-key signed kernel on the eMMC, started with Ctrl+D) needs developer mode to accept it. On at least one enrolled Lenovo 100e Gen 2, Ctrl+D did nothing on either the 'OS verification is OFF' screen or the recovery screen, so the firmware is deciding this and software cannot override it without changing the firmware. Choosing `d` in the bootloader menu prints the firmware settings it can read (`crossystem` values, kexec support, disk layout) and saves them to `shimboot_diag.txt` on the boot drive, which narrows down why. Please attach that file to an issue.
@@ -92,9 +83,20 @@ Hardware steps (Cr50 board, so battery disconnect; SuzyQ/CCD needs dev mode):
 
 Chrome OS can't run on UEFI firmware. To go back, flash the stock firmware backup and use a recovery USB. Enrollment is tied to the device, so an enrolled unit normally re-enrolls on its own.
 
+## Graphics on the 4.14 kernel
+The kernel is fixed (it is signed, and `i915` and the whole DRM core are built into it, not modules), so the graphics stack has to match it. Mesa's `iris` OpenGL driver, and `anv` Vulkan from Mesa 23.2 onwards, refuse to start without `I915_PARAM_HAS_CONTEXT_ISOLATION`, a kernel feature from 4.16. What works instead, and what the image sets up by itself:
+
+| | Works on 4.14 | How |
+|---|---|---|
+| OpenGL | classic `i965` from `mesa-amber` 21.3.9 | `libgl1-amber-dri`, `libglx-amber0`, `libegl-amber0` come from the shimboot package repo (Debian itself does not ship them). `/etc/X11/Xsession.d/55shimboot-gpu` selects them only while the running kernel is older than 4.16. |
+| Vulkan | `anv` from Mesa 22.3 (Debian 12) | `mesa-vulkan-drivers` as packaged. Mesa 23.2+ (Debian 13) refuses with "Vulkan requires context isolation". |
+| `iris` | no | Needs kernel 4.16 or later. |
+
+This is why the default release is **bookworm**: it is the newest Debian whose stock Mesa still starts Vulkan on this kernel. Check on the device with `vulkaninfo --summary` and `glxinfo -B` (the renderer should say Mesa DRI Intel, not llvmpipe).
+
 ## Known limitations
 - The shim's Chrome OS kernel is old, so suspend and swap are disabled by it. Audio support is unverified on this board.
-- If GPU acceleration fails, install the `mesa-amber` drivers: `sudo apt install libglx-amber0 libegl-amber0` and set `MESA_LOADER_DRIVER_OVERRIDE=i965` in `/etc/environment`.
+- If OpenGL falls back to software rendering (llvmpipe), see the graphics section above. The amber packages are not in Debian, only in the shimboot repo, which `setup_rootfs.sh` already configures.
 - If you cannot connect to some wifi networks, disable PMF: `nmcli connection edit <name>`, `set 802-11-wireless-security.pmf disable`, `save`, `activate`.
 
 ## Copyright

@@ -100,6 +100,9 @@ move_mounts() {
 
 #settings, overridable by editing /opt/shimboot.conf on the bootloader partition
 USE_KEXEC="auto"       #"auto" kexecs into the rootfs's own kernel when possible, "no" always uses the shim kernel
+USE_KEXEC_MODULE="no"  #"yes" insmods /opt/shimboot_kexec.ko first. Off by default: it did not work on octopus, and the shim kernel's
+                       #LoadPin pins module and firmware loading to the first filesystem that loads one, so loading it from here
+                       #can make later loads from the real rootfs fail
 [ -f /opt/shimboot.conf ] && . /opt/shimboot.conf
 
 #get the whole-disk name (e.g. mmcblk0, sda) from a partition path
@@ -481,7 +484,7 @@ try_kexec() {
   fi
   #the octopus shim kernel has no built-in kexec. If a matching kexec module is shipped, load it:
   #it adds the kexec_load syscall and the reboot(LINUX_REBOOT_CMD_KEXEC) path at runtime.
-  if [ ! -e /sys/kernel/kexec_loaded ] && ! grep -q '^shimboot_kexec ' /proc/modules; then
+  if [ "$USE_KEXEC_MODULE" = "yes" ] && [ ! -e /sys/kernel/kexec_loaded ] && ! grep -q '^shimboot_kexec ' /proc/modules; then
     for ko in /opt/shimboot_kexec.ko "$mnt"/opt/shimboot_kexec.ko; do
       [ -f "$ko" ] || continue
       echo "kexec: loading the kexec module ($ko)"

@@ -1,0 +1,21 @@
+# sourced by /etc/X11/Xsession at the start of every X session
+#
+# The octopus shim kernel (Linux 4.14) lacks I915_PARAM_HAS_CONTEXT_ISOLATION, which landed in 4.16.
+# Mesa's iris (OpenGL) refuses to start without it, so graphics silently fall back to software
+# rendering. The classic i965 driver (mesa-amber, shipped in the shimboot package repo) predates that
+# requirement, so use it while the running kernel is older than 4.16 and the amber libraries exist.
+# On a newer kernel (kexec, UEFI image) nothing is changed and Mesa's iris is used as normal.
+#
+# No positional parameters are touched here, because Xsession sources this file in its own shell.
+case "$(uname -r)" in
+  [0-3].*|4.[0-9].*|4.1[0-5].*)
+    if [ -e /usr/lib/x86_64-linux-gnu/libGLX_amber.so.0 ]; then
+      __GLX_VENDOR_LIBRARY_NAME=amber
+      export __GLX_VENDOR_LIBRARY_NAME
+    fi
+    if [ -e /usr/share/glvnd/egl_vendor.d/50_amber.json ]; then
+      __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_amber.json
+      export __EGL_VENDOR_LIBRARY_FILENAMES
+    fi
+    ;;
+esac

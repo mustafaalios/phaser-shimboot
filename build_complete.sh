@@ -13,7 +13,7 @@ print_help() {
   echo "  desktop      - The desktop environment to install. This defaults to 'xfce'. Valid options include:"
   echo "                   gnome, xfce, kde, lxde, gnome-flashback, cinnamon, mate, lxqt"
   echo "  data_dir     - The working directory for the scripts. This defaults to ./data"
-  echo "  release      - Set this to either 'bookworm', 'trixie', or 'unstable' to build for Debian 12, 13, or unstable."
+  echo "  release      - Set this to either 'bookworm', 'trixie', or 'unstable' to build for Debian 12, 13, or unstable. Defaults to bookworm: its Mesa 22.3 still runs Vulkan on the 4.14 octopus kernel, Mesa 23.2 and later (trixie) does not."
   echo "  distro_kernel - Install the distro's own (much newer) kernel and kexec into it at boot. Defaults to true on debian."
   echo "  distro       - The Linux distro to use. This should be either 'debian' or 'alpine'."
   echo "  shim_board   - Take the signed shim kernel from another board's RMA shim, e.g. 'nissa' (Linux 5.15) or 'dedede' (5.4). EXPERIMENTAL: the octopus firmware has to accept it. Defaults to octopus."
@@ -218,7 +218,7 @@ if [ ! "$rootfs_dir" ]; then
   mkdir -p $rootfs_dir
 
   if [ "$distro" = "debian" ]; then
-    release="${release:-trixie}"
+    release="${release:-bookworm}"
   elif [ "$distro" = "alpine" ]; then
     release="${release:-edge}"
   else

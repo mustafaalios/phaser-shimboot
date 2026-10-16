@@ -17,18 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the normal octopus image, and two experimental ones that use another board's shim kernel
+          # only the octopus shim boots on this firmware. Donor shims from other boards (nissa, dedede,
+          # volteer, hatch) were tested on hardware and are rejected, so they are no longer built.
           - shim_board: octopus
             tag: octopus
-          - shim_board: nissa
-            tag: octopus_nissa
-          - shim_board: dedede
-            tag: octopus_dedede
-          # shims from the same era as the octopus one (May 2021), in case newer shims use a newer signing key
-          - shim_board: volteer
-            tag: octopus_volteer
-          - shim_board: hatch
-            tag: octopus_hatch
 
     runs-on: ubuntu-latest
     steps:
