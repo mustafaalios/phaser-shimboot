@@ -68,7 +68,7 @@ jobs:
           # setup_rootfs.sh only warns when a package fails to install, so prove they are really there
           r=data/rootfs_octopus
           cat $r/etc/debian_version
-          chroot $r dpkg-query -W -f='${Package} ${Version}\n' mesa-vulkan-drivers libgl1-amber-dri libglx-amber0 libegl-amber0 vulkan-tools mesa-utils systemd
+          dpkg-query --admindir=$r/var/lib/dpkg -W -f='${Package} ${Version}\n' mesa-vulkan-drivers libgl1-amber-dri libglx-amber0 libegl-amber0 vulkan-tools mesa-utils systemd
           test -e $r/usr/lib/x86_64-linux-gnu/libGLX_amber.so.0
           test -e $r/usr/lib/x86_64-linux-gnu/dri/i965_dri.so
           test -e $r/usr/share/glvnd/egl_vendor.d/50_amber.json
