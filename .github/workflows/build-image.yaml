@@ -63,6 +63,22 @@ jobs:
           file bootloader/bin/kexec
           ! ldd bootloader/bin/kexec 2>/dev/null | grep -q "=>"
 
+      - name: check the graphics stack made it into the rootfs
+        run: |
+          # setup_rootfs.sh only warns when a package fails to install, so prove they are really there
+          r=data/rootfs_octopus
+          cat $r/etc/debian_version
+          chroot $r dpkg-query -W -f='${Package} ${Version}\n' mesa-vulkan-drivers libgl1-amber-dri libglx-amber0 libegl-amber0 vulkan-tools mesa-utils systemd
+          test -e $r/usr/lib/x86_64-linux-gnu/libGLX_amber.so.0
+          test -e $r/usr/lib/x86_64-linux-gnu/dri/i965_dri.so
+          test -e $r/usr/share/glvnd/egl_vendor.d/50_amber.json
+          ls $r/usr/share/vulkan/icd.d/ | grep -i intel
+          test -f $r/etc/X11/Xsession.d/55shimboot-gpu
+          # the session script should select amber on a 4.14 kernel and leave a 6.x kernel alone
+          for k in 4.14.91-18023-gabcdef 6.12.48-amd64; do
+            KVER=$k SCRIPT="$PWD/$r/etc/X11/Xsession.d/55shimboot-gpu" sh -c 'uname() { echo "$KVER"; }; . "$SCRIPT"; echo "kernel $KVER -> GLX=${__GLX_VENDOR_LIBRARY_NAME:-unset} EGL=${__EGL_VENDOR_LIBRARY_FILENAMES:-unset}"'
+          done
+
       - name: show disk usage
         if: always()
         run: df -h
