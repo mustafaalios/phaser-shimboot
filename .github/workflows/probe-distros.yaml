@@ -34,9 +34,9 @@ jobs:
         run: |
           base=https://shimboot.ading.dev/debian
           for suite in bullseye bookworm trixie unstable; do
-            printf '  %-10s Release=%s\n' "$suite" "$(curl -s -o /dev/null -w '%{http_code}' $base/dists/$suite/Release)"
+            printf '  %-10s Release=%s\n' "$suite" "$(curl -sL -o /dev/null -w '%{http_code} -> %{url_effective}' $base/dists/$suite/Release)"
           done
           echo "  dists listing:"
-          curl -sS $base/dists/ | grep -o 'href="[^"?][^"]*"' | head -n 20 | sed 's/^/    /' || true
+          curl -sSL $base/dists/ | grep -o 'href="[^"?][^"]*"' | head -n 20 | sed 's/^/    /' || true
           echo "  packages in bookworm:"
-          curl -sS $base/dists/bookworm/main/binary-amd64/Packages 2>/dev/null | sed -n 's/^Package: //p;s/^Version: /    version /p' | head -n 40
+          curl -sSL $base/dists/bookworm/main/binary-amd64/Packages 2>/dev/null | sed -n 's/^Package: //p;s/^Version: /    version /p' | head -n 40
