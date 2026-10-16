@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pick the Xorg video driver that matches the running kernel. Run at boot, before the display manager.
+#
+# On a kernel older than 4.16 (the octopus shim kernel is 4.14) Mesa's iris cannot start, and Xorg's
+# default modesetting driver then refuses to use glamor on llvmpipe, which switches off DRI for every
+# client, so all OpenGL falls back to software rendering. The Intel X driver (SNA) provides DRI itself
+# without going through EGL, so use it there. On a newer kernel (UEFI image, kexec) nothing is forced and
+# modesetting + iris work as normal.
+
+conf_dir="${SHIMBOOT_XORG_CONF_DIR:-/etc/X11/xorg.conf.d}"
+intel_drv="${SHIMBOOT_INTEL_DRV:-/usr/lib/xorg/modules/drivers/intel_drv.so}"
+conf="$conf_dir/20-intel.conf"
+
+case "$(uname -r)" in
+  [0-3].*|4.[0-9].*|4.1[0-5].*) old_kernel=1 ;;
+  *) old_kernel= ;;
+esac
+
+if [ -n "$old_kernel" ] && [ -e "$intel_drv" ]; then
+  mkdir -p "$conf_dir"
+  cat > "$conf" << 'EOF'
+# generated at boot by shimboot-gpu-xorg, only while the running kernel is older than 4.16
+Section "Device"
+    Identifier "Intel"
+    Driver "intel"
+    Option "AccelMethod" "sna"
+EndSection
+EOF
+else
+  rm -f "$conf"
+fi

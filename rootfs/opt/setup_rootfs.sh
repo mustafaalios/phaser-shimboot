@@ -51,6 +51,7 @@ apt-get install -y --reinstall --allow-downgrades $installed_systemd
 systemctl enable kill-frecon.service
 systemctl enable expand-rootfs.service
 systemctl enable fix-charging.service
+systemctl enable shimboot-gpu-xorg.service
 
 #install base packages
 if [ ! "$disable_base_pkgs" ]; then
@@ -71,6 +72,9 @@ if [ ! "$disable_base_pkgs" ]; then
   #/etc/X11/Xsession.d/55shimboot-gpu selects amber only while the running kernel is older than 4.16.
   #Vulkan (anv) only starts on a kernel without context isolation up to Mesa 23.0, so this wants bookworm.
   apt-get install -y mesa-vulkan-drivers vulkan-tools mesa-utils || echo "warning: could not install the vulkan and mesa diagnostic packages"
+  #the Intel X driver provides DRI without EGL, which Xorg's glamor cannot use on this kernel;
+  #/usr/local/bin/shimboot-gpu-xorg only turns it on while the running kernel is older than 4.16
+  apt-get install -y xserver-xorg-video-intel || echo "warning: could not install the intel x driver, the desktop falls back to software rendering on the 4.14 kernel"
   apt-get install -y libgl1-amber-dri libglx-amber0 libegl-amber0 || echo "warning: mesa-amber is not available for ${release_name}, opengl falls back to software rendering on the 4.14 kernel"
 
   #update apt-file cache

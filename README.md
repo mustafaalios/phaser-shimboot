@@ -88,7 +88,7 @@ The kernel is fixed (it is signed, and `i915` and the whole DRM core are built i
 
 | | Works on 4.14 | How |
 |---|---|---|
-| OpenGL | classic `i965` from `mesa-amber` 21.3.9 | `libgl1-amber-dri`, `libglx-amber0`, `libegl-amber0` come from the shimboot package repo (Debian itself does not ship them). `/etc/X11/Xsession.d/55shimboot-gpu` selects them only while the running kernel is older than 4.16. |
+| OpenGL | classic `i965` from `mesa-amber` 21.3.9, through the Intel X driver | `libgl1-amber-dri`, `libglx-amber0`, `libegl-amber0` come from the shimboot package repo (Debian itself does not ship them). `/etc/X11/Xsession.d/55shimboot-gpu` selects them for applications, and `shimboot-gpu-xorg.service` switches Xorg to `xserver-xorg-video-intel` (written to `/etc/X11/xorg.conf.d/20-intel.conf`), both only while the running kernel is older than 4.16. The default `modesetting` driver cannot be used: its glamor acceleration needs EGL, which falls back to llvmpipe here, and then Xorg switches DRI off for every client. |
 | Vulkan | `anv` from Mesa 22.3 (Debian 12) | `mesa-vulkan-drivers` as packaged. Mesa 23.2+ (Debian 13) refuses with "Vulkan requires context isolation". |
 | `iris` | no | Needs kernel 4.16 or later. |
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=select the Xorg video driver for the running kernel
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/shimboot-gpu-xorg
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
