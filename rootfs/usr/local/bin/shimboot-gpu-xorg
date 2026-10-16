@@ -4,7 +4,7 @@
 # On a kernel older than 4.16 (the octopus shim kernel is 4.14) Mesa's iris cannot start, and Xorg's
 # default modesetting driver then refuses to use glamor on llvmpipe, which switches off DRI for every
 # client, so all OpenGL falls back to software rendering. The Intel X driver (SNA) provides DRI itself
-# without going through EGL, so use it there. On a newer kernel (UEFI image, kexec) nothing is forced and
+# without going through EGL, so use it there, with DRI3 on because Vulkan cannot present without it. On a newer kernel (UEFI image, kexec) nothing is forced and
 # modesetting + iris work as normal.
 
 conf_dir="${SHIMBOOT_XORG_CONF_DIR:-/etc/X11/xorg.conf.d}"
@@ -24,6 +24,7 @@ Section "Device"
     Identifier "Intel"
     Driver "intel"
     Option "AccelMethod" "sna"
+    Option "DRI" "3"
 EndSection
 EOF
 else
