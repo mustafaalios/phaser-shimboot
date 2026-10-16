@@ -40,3 +40,35 @@ jobs:
           curl -sSL $base/dists/ | grep -o 'href="[^"?][^"]*"' | head -n 20 | sed 's/^/    /' || true
           echo "  packages in bookworm:"
           curl -sSL $base/dists/bookworm/main/binary-amd64/Packages 2>/dev/null | sed -n 's/^Package: //p;s/^Version: /    version /p' | head -n 40
+
+  amber-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: what is inside the mesa-amber packages from the shimboot repo
+        run: |
+          base=https://shimboot.pages.dev/debian
+          for suite in bookworm trixie; do
+            echo "== suite $suite: amber and mesa related packages"
+            curl -sSL $base/dists/$suite/main/binary-amd64/Packages | python3 -I -c '
+          import sys
+          for block in sys.stdin.read().split("\n\n"):
+              f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+              n = f.get("Package", "")
+              if "amber" in n or "mesa" in n or n == "croskbd":
+                  print("  %-28s %-16s %s" % (n, f.get("Version"), f.get("Filename")))
+          '
+          done
+          mkdir -p debs && cd debs
+          curl -sSL $base/dists/bookworm/main/binary-amd64/Packages | python3 -I -c '
+          import sys
+          for block in sys.stdin.read().split("\n\n"):
+              f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+              if f.get("Package") in ("libglx-amber0", "libgl1-amber-dri", "libegl-amber0"):
+                  print(f["Filename"])
+          ' > list.txt
+          while read f; do curl -sSLO "$base/$f"; done < list.txt
+          for d in *.deb; do
+            echo "######## $d"
+            dpkg-deb -I "$d" | grep -E "^ (Package|Version|Depends|Conflicts|Provides|Replaces)"
+            dpkg-deb -c "$d" | awk '{print "    " $NF}' | grep -vE "/$" | head -n 40
+          done
